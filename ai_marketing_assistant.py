@@ -53,11 +53,8 @@ timeline = st.selectbox("Implementation timeline:", ["<30 days", "30-60 days", "
 
 # ─── HAF & CII Sections ─────────────────────────────────────────────────────────
 critical_roles = st.text_area("Who are the key team members or roles in your operations?")
-role_responsibilities = st.text_area("What are the primary responsibilities for each of those roles?")
 workflow_map = st.text_area("Describe the sequence from first contact to fulfillment:")
 ai_task_opportunities = st.text_area("Where could AI reduce manual work?")
-handoff_points = st.text_area("Where do tasks hand off between teams?")
-decision_points = st.text_area("Which decisions today could be automated?")
 data_sources = st.text_area("What systems store your customer/product data?")
 contextual_memory = st.text_area("What historical context would be useful for your agents?")
 tools_by_function = st.text_area("For each function, what tools do you use?")
@@ -71,48 +68,61 @@ if st.button("🧠 Generate Full Report & Scope"):
     with st.spinner("Processing…"):
         raw_data = {
             "ClientProfile": {
-                "name": user_name, "business": business_name, "website": website,
-                "industry": industry, "location": location,
-                "revenue": annual_revenue, "employees": employees
+                "name": user_name,
+                "business": business_name,
+                "website": website,
+                "industry": industry,
+                "location": location,
+                "revenue": annual_revenue,
+                "employees": employees
             },
             "SalesOps": {
-                "sales_process": sales_process, "lead_tools": lead_tools,
+                "sales_process": sales_process,
+                "lead_tools": lead_tools,
                 "crm": crm_name if has_crm == "Yes" else "None",
-                "booking": booking_process, "followups": follow_up
+                "booking": booking_process,
+                "followups": follow_up
             },
             "Marketing": {
-                "channels": channels, "routing": lead_routing,
-                "post_lead": lead_action, "automations": existing_automations
+                "channels": channels,
+                "routing": lead_routing,
+                "post_lead": lead_action,
+                "automations": existing_automations
             },
             "Retention": {
-                "sales_cycle": sales_cycle, "follow_up_tactics": follow_up_tactics,
+                "sales_cycle": sales_cycle,
+                "follow_up_tactics": follow_up_tactics,
                 "programs": retention_programs
             },
             "AIReadiness": {
-                "uses_ai": uses_ai, "tools": ai_tools,
-                "manual_areas": manual_areas, "dream": dream_automation
+                "uses_ai": uses_ai,
+                "tools": ai_tools,
+                "manual_areas": manual_areas,
+                "dream": dream_automation
             },
             "TechStack": {
-                "tools": tools, "api_access": api_access, "comms": comms
+                "tools": tools,
+                "api_access": api_access,
+                "comms": comms
             },
             "GoalsTimeline": {
-                "goals": goals, "problem": biggest_problem,
-                "comfort": comfort, "engagement": engagement, "timeline": timeline
+                "goals": goals,
+                "problem": biggest_problem,
+                "comfort": comfort,
+                "engagement": engagement,
+                "timeline": timeline
             },
             "HAF": {
                 "CriticalRoles": critical_roles,
-                "RoleResponsibilities": role_responsibilities,
-                "KeyWorkflows": workflow_map,
-                "AIEligibleTasks": ai_task_opportunities,
-                "HandoffPoints": handoff_points,
-                "DecisionPoints": decision_points
+                "Workflows": workflow_map,
+                "AIEligibleTasks": ai_task_opportunities
             },
             "CII": {
                 "DataSources": data_sources,
-                "MemoryRequirements": contextual_memory,
-                "ToolsByFunction": tools_by_function,
+                "MemoryNeeds": contextual_memory,
+                "Tooling": tools_by_function,
                 "APIReadiness": api_readiness,
-                "ComplianceFlags": compliance_flags,
+                "Compliance": compliance_flags,
                 "Latency": {
                     "Realtime": realtime_flows,
                     "Async": batch_or_async_flows
@@ -124,8 +134,8 @@ if st.button("🧠 Generate Full Report & Scope"):
         try:
             out = run_pipeline(raw_data)
             st.subheader("📄 Client-Facing Report")
-            st.markdown(out["client_report"])
+            st.markdown(out["client_report"], unsafe_allow_html=True)
             st.subheader("📋 Dev-Facing Blueprint")
-            st.code(out["dev_report"], language="python")
+            st.markdown(out["dev_report"], unsafe_allow_html=True)
         except Exception as e:
             st.error(f"❌ Failed to generate reports: {e}")

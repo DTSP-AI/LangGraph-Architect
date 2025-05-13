@@ -1,10 +1,9 @@
-# File: C:\AI_src\marketing-assistant\graph.py
+# C:\AI_src\LangGraph-Architect\graph.py
 
 import os
 import json
 import logging
-import re
-from typing import TypedDict, Any, List
+from typing import TypedDict, Any, List, Dict
 from pydantic import BaseModel, ValidationError
 from langchain_openai import ChatOpenAI
 from langchain.schema import SystemMessage, HumanMessage
@@ -35,26 +34,28 @@ with open(os.path.join(BASE_DIR, "knowledge_base/LGarchitect_LangGraph_core_slim
 
 # ─── Data Models ───────────────────────────────────────────────────────────────
 class ClientIntake(BaseModel):
-    ClientProfile: dict
-    SalesOps: dict
-    Marketing: dict
-    Retention: dict
-    AIReadiness: dict
-    TechStack: dict
-    GoalsTimeline: dict
-    HAF: dict
-    CII: dict
+    ClientProfile: Dict[str, Any]
+    SalesOps: Dict[str, Any]
+    Marketing: Dict[str, Any]
+    Retention: Dict[str, Any]
+    AIReadiness: Dict[str, Any]
+    TechStack: Dict[str, Any]
+    GoalsTimeline: Dict[str, Any]
+    HAF: Dict[str, Any]
+    CII: Dict[str, Any]
     ReferenceDocs: str
 
 class IntakeSummary(BaseModel):
-    ClientProfile: dict
-    Good: List[str]
-    Bad: List[str]
-    Ugly: List[str]
+    ClientProfile: Dict[str, Any]
+    Highlights: List[str]
+    PainPoints: List[str]
+    CriticalRisks: List[str]
     SolutionSummary: str
     WorkflowOutline: List[str]
-    HAF: dict
-    CII: dict
+    AgentMap: List[Dict[str, Any]]
+    ToolHooks: List[str]
+    HAF: Dict[str, Any]
+    CII: Dict[str, Any]
 
 class ClientFacingReport(BaseModel):
     report_markdown: str
@@ -80,6 +81,7 @@ def bootstrap_node(state: GraphState) -> dict:
     logger.info("[BOOTSTRAP] Intake acknowledged.")
     return {}
 
+
 def summarizer_node(state: GraphState) -> dict:
     raw_json = json.dumps(state["intake"].model_dump(), indent=2)
     messages = [
@@ -97,11 +99,12 @@ def summarizer_node(state: GraphState) -> dict:
         logger.error(f"[SUMMARIZER] Validation failed: {e}")
         raise
 
+
 def report_node(state: GraphState) -> dict:
     summary_json = json.dumps(state["summary"].model_dump(), indent=2)
     messages = [
         SystemMessage(content=agent2_prompt["system"] + "\n\n" + core_kb + "\n" + tools_kb),
-        HumanMessage(content=summary_json)
+        HumanMessage(content=agent2_prompt["user_template"].replace("{SUMMARY_JSON}", summary_json))
     ]
     response = llm.invoke(messages)
     try:
@@ -119,11 +122,10 @@ def report_node(state: GraphState) -> dict:
 
 # ─── Build Graph ───────────────────────────────────────────────────────────────
 builder = StateGraph(GraphState)
-builder.add_node("bootstrap", bootstrap_node)
+builder.add_node(START, bootstrap_node)
 builder.add_node("summarize", summarizer_node)
 builder.add_node("report", report_node)
-builder.add_edge(START, "bootstrap")
-builder.add_edge("bootstrap", "summarize")
+builder.add_edge(START, "summarize")
 builder.add_edge("summarize", "report")
 builder.add_edge("report", END)
 
