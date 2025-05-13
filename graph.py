@@ -2,7 +2,7 @@ import os
 import json
 import logging
 from typing import TypedDict, Any, List, Dict
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from langchain_openai import ChatOpenAI
 from langchain.schema import SystemMessage, HumanMessage
 from langgraph.graph import StateGraph, START, END
@@ -28,25 +28,25 @@ llm = ChatOpenAI(
 # ─── Data Models ───────────────────────────────────────────────────────────────
 class ClientIntake(BaseModel):
     ClientProfile: Dict[str, Any]
-    SalesOps: Dict[str, Any]
-    Marketing: Dict[str, Any]
-    Retention: Dict[str, Any]
-    AIReadiness: Dict[str, Any]
-    TechStack: Dict[str, Any]
+    SalesOps:      Dict[str, Any]
+    Marketing:     Dict[str, Any]
+    Retention:     Dict[str, Any]
+    AIReadiness:   Dict[str, Any]
+    TechStack:     Dict[str, Any]
     GoalsTimeline: Dict[str, Any]
-    HAF: Dict[str, Any]
-    CII: Dict[str, Any]
+    HAF:           Dict[str, Any]
+    CII:           Dict[str, Any]
     ReferenceDocs: str
 
 class IntakeSummary(BaseModel):
-    ClientProfile: Dict[str, Any]
-    Good: List[str]
-    Bad: List[str]
-    Ugly: List[str]
-    SolutionSummary: str
-    WorkflowOutline: List[str]
-    HAF: Dict[str, Any]
-    CII: Dict[str, Any]
+    ClientProfile:    Dict[str, Any]
+    Good:             List[str]
+    Bad:              List[str]
+    Ugly:             List[str]
+    SolutionSummary:  str
+    WorkflowOutline:  List[str]
+    HAF:              Dict[str, Any]
+    CII:              Dict[str, Any]
 
 class ClientFacingReport(BaseModel):
     report_markdown: str
@@ -55,10 +55,10 @@ class DevFacingReport(BaseModel):
     blueprint_graph: str
 
 class GraphState(TypedDict):
-    intake: ClientIntake
-    summary: IntakeSummary
+    intake:        ClientIntake
+    summary:       IntakeSummary
     client_report: ClientFacingReport
-    dev_report: DevFacingReport
+    dev_report:    DevFacingReport
 
 # ─── Load Prompt Content & KBs ──────────────────────────────────────────────────
 with open(os.path.join(BASE_DIR, "prompts/agent_1.json"), encoding="utf-8") as f:
@@ -78,8 +78,10 @@ def inject_test_data_node(state: dict) -> dict:
         logger.info("[TEST_CLIENT] Generating dynamic test intake via LLM")
         prompt = (
             "Generate a random ClientIntake JSON object matching this schema:\n"
-            "- ClientProfile: name (string), business, website, industry, location, revenue (number), employees (number)\n"
-            "- SalesOps, Marketing, Retention, AIReadiness, TechStack, GoalsTimeline, HAF, CII: each an object with realistic fields matching production intake\n"
+            "- ClientProfile: name (string), business, website, industry, location, "
+            "revenue (number), employees (number)\n"
+            "- SalesOps, Marketing, Retention, AIReadiness, TechStack, GoalsTimeline, "
+            "HAF, CII: realistic fields matching production intake\n"
             "- ReferenceDocs: empty string\n"
             "Output must be a single valid JSON object with those top-level keys."
         )
@@ -87,8 +89,8 @@ def inject_test_data_node(state: dict) -> dict:
             SystemMessage(content="You are a data generator."),
             HumanMessage(content=prompt)
         ]
-        response = llm.invoke(messages)
-        content = response.content.strip()
+        resp = llm.invoke(messages)
+        content = resp.content.strip()
         if content.startswith("```"):
             content = "\n".join(
                 line for line in content.splitlines()
@@ -98,34 +100,43 @@ def inject_test_data_node(state: dict) -> dict:
         intake = ClientIntake(**raw)
         logger.info(f"[TEST_CLIENT] Injected intake for {intake.ClientProfile.get('name')}")
         return {"intake": intake}
-    return state
+    # No injection—leave intake untouched
+    return {}
 
 # ─── Agent 2: Summarize Intake Data ────────────────────────────────────────────
 def summarizer_node(state: GraphState) -> dict:
-    raw_json = json.dumps(state["intake"].model_dump(), indent=2)
+    raw_intake = state["intake"].model_dump()  # Pydantic V2; use .dict() if V1
     messages = [
         SystemMessage(content=agent1_prompt["system"] + "\n\n" + multi_kb),
-        HumanMessage(content=agent1_prompt["user_template"].replace("{RAW_INTAKE_JSON}", raw_json))
+        HumanMessage(content=agent1_prompt["user_template"].replace(
+            "{RAW_INTAKE_JSON}", json.dumps(raw_intake, indent=2)
+        ))
     ]
-    response = llm.invoke(messages)
-    content = response.content.strip()
+    resp = llm.invoke(messages)
+    content = resp.content.strip()
     if content.startswith("```"):
         content = "\n".join(
             line for line in content.splitlines()
             if not line.strip().startswith("```")
         ).strip()
-    summary = IntakeSummary.parse_raw(content)
+    try:
+        summary = IntakeSummary.parse_raw(content)
+    except ValidationError as e:
+        logger.error(f"[SUMMARIZER] Validation failed: {e}")
+        raise
     return {"summary": summary}
 
 # ─── Agent 3: Generate Client + Dev Reports ─────────────────────────────────────
 def report_node(state: GraphState) -> dict:
-    summary_json = json.dumps(state["summary"].model_dump(), indent=2)
+    summary_data = state["summary"].model_dump()
     messages = [
         SystemMessage(content=agent2_prompt["system"] + "\n\n" + core_kb + "\n" + tools_kb),
-        HumanMessage(content=agent2_prompt["user_template"].replace("{SUMMARY_JSON}", summary_json))
+        HumanMessage(content=agent2_prompt["user_template"].replace(
+            "{SUMMARY_JSON}", json.dumps(summary_data, indent=2)
+        ))
     ]
-    response = llm.invoke(messages)
-    content = response.content.strip()
+    resp = llm.invoke(messages)
+    content = resp.content.strip()
     if content.startswith("```"):
         content = "\n".join(
             line for line in content.splitlines()
@@ -133,30 +144,30 @@ def report_node(state: GraphState) -> dict:
         ).strip()
     data = json.loads(content)
     return {
-        "client_report": ClientFacingReport(report_markdown=data.get("client_report", "")),
-        "dev_report": DevFacingReport(blueprint_graph=data.get("developer_report", ""))
+        "client_report": ClientFacingReport(report_markdown=data["client_report"]),
+        "dev_report":    DevFacingReport(blueprint_graph=data["developer_report"])
     }
 
 # ─── Build LangGraph ────────────────────────────────────────────────────────────
 builder = StateGraph(GraphState)
 builder.add_node("inject_test", inject_test_data_node)
-builder.add_node("summarize", summarizer_node)
-builder.add_node("report", report_node)
-builder.add_edge(START, "inject_test")
+builder.add_node("summarize",   summarizer_node)
+builder.add_node("report",      report_node)
+builder.add_edge(START,         "inject_test")
 builder.add_edge("inject_test", "summarize")
-builder.add_edge("summarize", "report")
-builder.add_edge("report", END)
+builder.add_edge("summarize",   "report")
+builder.add_edge("report",      END)
 
 graph = builder.compile()
 
 # ─── Public API ─────────────────────────────────────────────────────────────────
-def run_pipeline(raw_intake: dict) -> Any:
+def run_pipeline(raw_intake: dict) -> Dict[str, str]:
     intake_model = ClientIntake(**raw_intake)
-    os.environ["TEST_MODE"] = str(os.getenv("TEST_MODE", "false"))
+    os.environ["TEST_MODE"] = os.getenv("TEST_MODE", "false")
     result = graph.invoke({"intake": intake_model})
     return {
         "client_report": result["client_report"].report_markdown,
-        "dev_report": result["dev_report"].blueprint_graph
+        "dev_report":    result["dev_report"].blueprint_graph
     }
 
 # ─── CLI Test Hook ──────────────────────────────────────────────────────────────
@@ -165,8 +176,6 @@ if __name__ == "__main__":
     with open(sample_file, encoding="utf-8") as f:
         sample = json.load(f)
     os.environ["TEST_MODE"] = "true"
-    out = run_pipeline(sample)
-    print("\n==== CLIENT REPORT ====\n")
-    print(out["client_report"])
-    print("\n==== DEV REPORT ====\n")
-    print(out["dev_report"])
+    reports = run_pipeline(sample)
+    print("\n==== CLIENT REPORT ====\n", reports["client_report"])
+    print("\n==== DEV REPORT ====\n",    reports["dev_report"])
