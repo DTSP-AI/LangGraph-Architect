@@ -14,24 +14,21 @@ if not openai_key:
 st.set_page_config(page_title="AI Business Optimization Intake", layout="wide")
 st.title("🧠 AI Solutions Discovery & Optimization Intake")
 
-# ─── Sidebar: Test Mode Controls (Top-Left) ────────────────────────────────────
+# ─── Sidebar: Test Mode Toggle & Refresh (Top) ──────────────────────────────────
 test_mode = st.sidebar.checkbox("🧪 Enable Test Client Mode", value=False)
 if test_mode:
     os.environ["TEST_MODE"] = "true"
     st.sidebar.success("✅ Test Client Mode is ON")
     if st.sidebar.button("🔄 Load New Test Client"):
-        # This rerun will trigger inject_test_data_node next pipeline run
         st.experimental_rerun()
 else:
     os.environ["TEST_MODE"] = "false"
 
-# ─── Sidebar: Settings Header (Optional) ───────────────────────────────────────
-st.sidebar.markdown("---")
-st.sidebar.header("⚙️ Settings")
-
-# ─── Main: Test Mode Indicator ─────────────────────────────────────────────────
 if os.getenv("TEST_MODE", "false") == "true":
     st.warning("⚠️ Running in TEST MODE with dynamic GPT-generated client data.")
+
+# ─── Sidebar Divider ────────────────────────────────────────────────────────────
+st.sidebar.markdown("---")
 
 # ─── Sidebar: Business Intake Form ─────────────────────────────────────────────
 st.sidebar.header("📋 Business Intake Form")
@@ -45,12 +42,12 @@ employees            = st.sidebar.number_input("Number of Employees", min_value=
 
 # ─── Main Intake Fields ────────────────────────────────────────────────────────
 sales_process        = st.sidebar.text_area("Describe your current sales process:")
-lead_tools           = st.sidebar.text_area("What tools do you use for leads and appointments?")
+lead_tools           = st.sidebar.text_area("Tools you use for leads and appointments:")
 has_crm              = st.sidebar.selectbox("Do you use a CRM?", ["Yes", "No"])
 crm_name             = st.sidebar.text_input("If yes, which CRM?")
 booking_process      = st.sidebar.text_area("How are appointments booked?")
-follow_up            = st.sidebar.text_area("How do you track follow-ups or missed leads?")
-channels             = st.sidebar.multiselect("Active Marketing Channels", ["Google Ads", "Meta Ads", "TikTok", "SEO", "Influencer", "Referral", "Events"])
+follow_up            = st.sidebar.text_area("How do you track follow-ups?")
+channels             = st.sidebar.multiselect("Active Marketing Channels", ["Google Ads","Meta Ads","TikTok","SEO","Influencer","Referral","Events"])
 lead_routing         = st.sidebar.text_area("How are leads captured and routed?")
 lead_action          = st.sidebar.text_area("What happens after a lead comes in?")
 existing_automations = st.sidebar.text_area("Any automations in place?")
@@ -59,24 +56,25 @@ follow_up_tactics    = st.sidebar.text_area("Follow-up tactics for missed or aba
 retention_programs   = st.sidebar.text_area("Loyalty or re-engagement programs:")
 uses_ai              = st.sidebar.selectbox("Are you using AI currently?", ["Yes", "No"])
 ai_tools             = st.sidebar.text_area("If yes, describe your AI tools/setup:")
-manual_areas         = st.sidebar.multiselect("Manual tasks you spend time on:", ["Lead follow-up", "Appointment setting", "Content creation", "Customer questions"])
+manual_areas         = st.sidebar.multiselect("Manual tasks you spend time on:", ["Lead follow-up","Appointment setting","Content creation","Customer questions"])
 dream_automation     = st.sidebar.text_area("What would you automate if it worked perfectly?")
-tools                = st.sidebar.multiselect("Current Tools in Use", ["Calendly", "Shopify", "Squarespace", "Twilio", "Stripe", "Zapier", "Klaviyo", "Mailchimp", "GoHighLevel"])
-api_access           = st.sidebar.selectbox("Do you have API/admin access?", ["Yes", "No", "Not sure"])
-comms                = st.sidebar.selectbox("Preferred communication method:", ["Text", "Email", "Phone", "DMs", "Website Chat"])
+tools                = st.sidebar.multiselect("Current Tools in Use", ["Calendly","Shopify","Squarespace","Twilio","Stripe","Zapier","Klaviyo","Mailchimp","GoHighLevel"])
+api_access           = st.sidebar.selectbox("Do you have API/admin access?", ["Yes","No","Not sure"])
+comms                = st.sidebar.selectbox("Preferred communication method:", ["Text","Email","Phone","DMs","Website Chat"])
 goals                = st.sidebar.text_area("Top 3 revenue goals (next 6 months):")
 biggest_problem      = st.sidebar.text_area("What’s the #1 problem you’re solving right now?")
-comfort              = st.sidebar.selectbox("Comfort level with automation/AI:", ["Bring on the robots", "Need guidance", "Start simple"])
-engagement           = st.sidebar.selectbox("Preferred engagement model:", ["Done-For-You", "Hybrid", "DIY with Support"])
-timeline             = st.sidebar.selectbox("Implementation timeline:", ["<30 days", "30-60 days", "60-90 days", "Flexible"])
+comfort              = st.sidebar.selectbox("Comfort level with automation/AI:", ["Bring on the robots","Need guidance","Start simple"])
+engagement           = st.sidebar.selectbox("Preferred engagement model:", ["Done-For-You","Hybrid","DIY with Support"])
+timeline             = st.sidebar.selectbox("Implementation timeline:", ["<30 days","30-60 days","60-90 days","Flexible"])
 
 # ─── Sidebar: HAF & CII Sections ────────────────────────────────────────────────
+st.sidebar.markdown("---")
 st.sidebar.header("🔧 HAF & CII")
 critical_roles       = st.sidebar.text_area("Key team roles:")
 role_responsibilities= st.sidebar.text_area("Responsibilities for each role:")
 workflow_map         = st.sidebar.text_area("Sequence from first contact to fulfillment:")
 ai_task_opportunities= st.sidebar.text_area("Where could AI reduce manual work?")
-data_sources         = st.sidebar.text_area("Systems storing customer/product data:")
+data_sources         = st.sidebar.text_area("Systems storing your customer/product data:")
 contextual_memory    = st.sidebar.text_area("Historical context useful for agents:")
 tools_by_function    = st.sidebar.text_area("Tools by function:")
 api_readiness        = st.sidebar.text_area("API/admin access to those tools?")
@@ -154,9 +152,10 @@ if st.button("🧠 Generate Full Report & Scope"):
 
         try:
             out = run_pipeline(raw_data)
-            st.subheader("📄 Client-Facing Report")
+            st.subheader("📄 Client‐Facing Report")
             st.markdown(out["client_report"], unsafe_allow_html=True)
-            st.subheader("📋 Dev-Facing Blueprint")
+            st.subheader("📋 Dev‐Facing Blueprint")
             st.markdown(out["dev_report"], unsafe_allow_html=True)
         except Exception as e:
             st.error(f"❌ Failed to generate reports: {e}")
+
