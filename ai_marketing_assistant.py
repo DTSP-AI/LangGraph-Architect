@@ -1,5 +1,3 @@
-# File: ai_marketing_assistant.py
-
 import os
 import streamlit as st
 from dotenv import load_dotenv
@@ -43,7 +41,7 @@ with st.sidebar:
     annual_revenue = st.number_input("Annual Revenue (USD)", min_value=0, step=1000, value=0, format="%d")
     employees = st.number_input("Number of Employees", min_value=0, step=1, value=0, format="%d")
 
-    # ─── Main Intake Fields ─────────────────────────────────────────────────────
+    # Main Intake Fields
     sales_process = st.text_area("Describe your current sales process:")
     lead_tools = st.text_area("What tools do you use for leads and appointments?")
     has_crm = st.selectbox("Do you use a CRM?", ["Yes", "No"])
@@ -70,7 +68,7 @@ with st.sidebar:
     engagement = st.selectbox("Preferred engagement model:", ["Done-For-You", "Hybrid", "DIY with Support"])
     timeline = st.selectbox("Implementation timeline:", ["<30 days", "30-60 days", "60-90 days", "Flexible"])
 
-    # ─── HAF & CII Sections ─────────────────────────────────────────────────────
+    # HAF & CII Sections
     critical_roles = st.text_area("Key team roles:")
     role_responsibilities = st.text_area("Responsibilities for each role:")
     workflow_map = st.text_area("Sequence from first contact to fulfillment:")

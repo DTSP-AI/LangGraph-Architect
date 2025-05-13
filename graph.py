@@ -3,7 +3,7 @@ import json
 import logging
 import random
 from typing import TypedDict, Any, List, Dict
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 from langchain_openai import ChatOpenAI
 from langchain.schema import SystemMessage, HumanMessage
 from langgraph.graph import StateGraph, START, END
@@ -19,17 +19,12 @@ BASE_DIR = os.path.dirname(__file__)
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
-# ─── Load Prompt Content ───────────────────────────────────────────────────────
-with open(os.path.join(BASE_DIR, "prompts/agent_1.json"), encoding="utf-8") as f:
-    agent1_prompt = json.load(f)
-with open(os.path.join(BASE_DIR, "prompts/agent_2.json"), encoding="utf-8") as f:
-    agent2_prompt = json.load(f)
-with open(os.path.join(BASE_DIR, "knowledge_base/LGarchitect_tools_slim.txt"), encoding="utf-8") as f:
-    tools_kb = f.read()
-with open(os.path.join(BASE_DIR, "knowledge_base/LGarchitect_multi_agent_slim.txt"), encoding="utf-8") as f:
-    multi_kb = f.read()
-with open(os.path.join(BASE_DIR, "knowledge_base/LGarchitect_LangGraph_core_slim.txt"), encoding="utf-8") as f:
-    core_kb = f.read()
+# ─── LLM Init ───────────────────────────────────────────────────────────────────
+llm = ChatOpenAI(
+    model_name="gpt-4o-mini",
+    temperature=0.0,
+    openai_api_key=OPENAI_API_KEY,
+)
 
 # ─── Data Models ───────────────────────────────────────────────────────────────
 class ClientIntake(BaseModel):
@@ -66,24 +61,44 @@ class GraphState(TypedDict):
     client_report: ClientFacingReport
     dev_report: DevFacingReport
 
-# ─── LLM Init ───────────────────────────────────────────────────────────────────
-llm = ChatOpenAI(
-    model_name="gpt-4o-mini",
-    temperature=0.0,
-    openai_api_key=OPENAI_API_KEY,
-)
+# ─── Load Prompt Content & KBs ──────────────────────────────────────────────────
+with open(os.path.join(BASE_DIR, "prompts/agent_1.json"), encoding="utf-8") as f:
+    agent1_prompt = json.load(f)
+with open(os.path.join(BASE_DIR, "prompts/agent_2.json"), encoding="utf-8") as f:
+    agent2_prompt = json.load(f)
+with open(os.path.join(BASE_DIR, "knowledge_base/LGarchitect_tools_slim.txt"), encoding="utf-8") as f:
+    tools_kb = f.read()
+with open(os.path.join(BASE_DIR, "knowledge_base/LGarchitect_multi_agent_slim.txt"), encoding="utf-8") as f:
+    multi_kb = f.read()
+with open(os.path.join(BASE_DIR, "knowledge_base/LGarchitect_LangGraph_core_slim.txt"), encoding="utf-8") as f:
+    core_kb = f.read()
 
-# ─── Agent 1: Inject Test Data If Enabled ──────────────────────────────────────
+# ─── Agent 1: Inject Dynamic Test Data If Enabled ──────────────────────────────
 def inject_test_data_node(state: dict) -> dict:
     if os.getenv("TEST_MODE", "false").lower() == "true":
-        test_path = os.path.join(BASE_DIR, "test_data_samples.json")
-        if not os.path.exists(test_path):
-            raise FileNotFoundError("Missing test_data_samples.json for TEST_MODE.")
-        with open(test_path, encoding="utf-8") as f:
-            test_clients = json.load(f)
-        selected = random.choice(test_clients)
-        logger.info(f"[TEST] Injected test client: {selected['ClientProfile']['name']}")
-        return {"intake": ClientIntake(**selected)}
+        logger.info("[TEST_CLIENT] Generating dynamic test intake via LLM")
+        prompt = (
+            "Generate a random ClientIntake JSON object matching this schema:\n"
+            "- ClientProfile: name (string), business, website, industry, location, revenue (number), employees (number)\n"
+            "- SalesOps, Marketing, Retention, AIReadiness, TechStack, GoalsTimeline, HAF, CII: each an object with realistic fields matching production intake\n"
+            "- ReferenceDocs: empty string\n"
+            "Output must be a single valid JSON object with those top-level keys."
+        )
+        messages = [
+            SystemMessage(content="You are a data generator."),
+            HumanMessage(content=prompt)
+        ]
+        response = llm.invoke(messages)
+        content = response.content.strip()
+        if content.startswith("```"):
+            content = "\n".join(
+                line for line in content.splitlines()
+                if not line.strip().startswith("```")
+            ).strip()
+        raw = json.loads(content)
+        intake = ClientIntake(**raw)
+        logger.info(f"[TEST_CLIENT] Injected intake for {intake.ClientProfile.get('name')}")
+        return {"intake": intake}
     return state
 
 # ─── Agent 2: Summarize Intake Data ────────────────────────────────────────────
@@ -94,15 +109,14 @@ def summarizer_node(state: GraphState) -> dict:
         HumanMessage(content=agent1_prompt["user_template"].replace("{RAW_INTAKE_JSON}", raw_json))
     ]
     response = llm.invoke(messages)
-    try:
-        content = response.content.strip()
-        if content.startswith("```"):
-            content = "\n".join(line for line in content.splitlines() if not line.strip().startswith("```")).strip()
-        summary = IntakeSummary.parse_raw(content)
-        return {"summary": summary}
-    except ValidationError as e:
-        logger.error(f"[SUMMARIZER] Validation failed: {e}")
-        raise
+    content = response.content.strip()
+    if content.startswith("```"):
+        content = "\n".join(
+            line for line in content.splitlines()
+            if not line.strip().startswith("```")
+        ).strip()
+    summary = IntakeSummary.parse_raw(content)
+    return {"summary": summary}
 
 # ─── Agent 3: Generate Client + Dev Reports ─────────────────────────────────────
 def report_node(state: GraphState) -> dict:
@@ -112,18 +126,17 @@ def report_node(state: GraphState) -> dict:
         HumanMessage(content=agent2_prompt["user_template"].replace("{SUMMARY_JSON}", summary_json))
     ]
     response = llm.invoke(messages)
-    try:
-        content = response.content.strip()
-        if content.startswith("```"):
-            content = "\n".join(line for line in content.splitlines() if not line.strip().startswith("```")).strip()
-        data = json.loads(content)
-        return {
-            "client_report": ClientFacingReport(report_markdown=data.get("client_report", "")),
-            "dev_report": DevFacingReport(blueprint_graph=data.get("developer_report", ""))
-        }
-    except (json.JSONDecodeError, ValidationError) as e:
-        logger.error(f"[REPORT] Parsing failed: {e}")
-        raise
+    content = response.content.strip()
+    if content.startswith("```"):
+        content = "\n".join(
+            line for line in content.splitlines()
+            if not line.strip().startswith("```")
+        ).strip()
+    data = json.loads(content)
+    return {
+        "client_report": ClientFacingReport(report_markdown=data.get("client_report", "")),
+        "dev_report": DevFacingReport(blueprint_graph=data.get("developer_report", ""))
+    }
 
 # ─── Build LangGraph ────────────────────────────────────────────────────────────
 builder = StateGraph(GraphState)
@@ -149,8 +162,8 @@ def run_pipeline(raw_intake: dict) -> Any:
 
 # ─── CLI Test Hook ──────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    test_file = os.path.join(BASE_DIR, "sample_intake.json")
-    with open(test_file, encoding="utf-8") as f:
+    sample_file = os.path.join(BASE_DIR, "sample_intake.json")
+    with open(sample_file, encoding="utf-8") as f:
         sample = json.load(f)
     os.environ["TEST_MODE"] = "true"
     out = run_pipeline(sample)
