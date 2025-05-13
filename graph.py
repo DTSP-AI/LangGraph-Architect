@@ -73,17 +73,20 @@ llm = ChatOpenAI(
     openai_api_key=OPENAI_API_KEY,
 )
 
-# ─── Nodes ─────────────────────────────────────────────────────────────────────
+# ─── Agent 1: Inject Test Data If Enabled ──────────────────────────────────────
 def inject_test_data_node(state: dict) -> dict:
     if os.getenv("TEST_MODE", "false").lower() == "true":
-        logger.info("[TEST_CLIENT] Test mode active. Loading randomized sample.")
-        with open(os.path.join(BASE_DIR, "test_data_samples.json"), encoding="utf-8") as f:
+        test_path = os.path.join(BASE_DIR, "test_data_samples.json")
+        if not os.path.exists(test_path):
+            raise FileNotFoundError("Missing test_data_samples.json for TEST_MODE.")
+        with open(test_path, encoding="utf-8") as f:
             test_clients = json.load(f)
         selected = random.choice(test_clients)
+        logger.info(f"[TEST] Injected test client: {selected['ClientProfile']['name']}")
         return {"intake": ClientIntake(**selected)}
-    else:
-        return state
+    return state
 
+# ─── Agent 2: Summarize Intake Data ────────────────────────────────────────────
 def summarizer_node(state: GraphState) -> dict:
     raw_json = json.dumps(state["intake"].model_dump(), indent=2)
     messages = [
@@ -101,6 +104,7 @@ def summarizer_node(state: GraphState) -> dict:
         logger.error(f"[SUMMARIZER] Validation failed: {e}")
         raise
 
+# ─── Agent 3: Generate Client + Dev Reports ─────────────────────────────────────
 def report_node(state: GraphState) -> dict:
     summary_json = json.dumps(state["summary"].model_dump(), indent=2)
     messages = [
@@ -121,7 +125,7 @@ def report_node(state: GraphState) -> dict:
         logger.error(f"[REPORT] Parsing failed: {e}")
         raise
 
-# ─── Build Graph ───────────────────────────────────────────────────────────────
+# ─── Build LangGraph ────────────────────────────────────────────────────────────
 builder = StateGraph(GraphState)
 builder.add_node("inject_test", inject_test_data_node)
 builder.add_node("summarize", summarizer_node)
@@ -143,14 +147,14 @@ def run_pipeline(raw_intake: dict) -> Any:
         "dev_report": result["dev_report"].blueprint_graph
     }
 
-# ─── Dev Test Hook ─────────────────────────────────────────────────────────────
+# ─── CLI Test Hook ──────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     test_file = os.path.join(BASE_DIR, "sample_intake.json")
     with open(test_file, encoding="utf-8") as f:
         sample = json.load(f)
     os.environ["TEST_MODE"] = "true"
     out = run_pipeline(sample)
-    print("\n==== CLIENT REPORT ====")
+    print("\n==== CLIENT REPORT ====\n")
     print(out["client_report"])
-    print("\n==== DEV REPORT ====")
+    print("\n==== DEV REPORT ====\n")
     print(out["dev_report"])
