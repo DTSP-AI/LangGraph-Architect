@@ -1,8 +1,7 @@
-# C:\AI_src\LangGraph-Architect\graph.py
-
 import os
 import json
 import logging
+import random
 from typing import TypedDict, Any, List, Dict
 from pydantic import BaseModel, ValidationError
 from langchain_openai import ChatOpenAI
@@ -47,13 +46,11 @@ class ClientIntake(BaseModel):
 
 class IntakeSummary(BaseModel):
     ClientProfile: Dict[str, Any]
-    Highlights: List[str]
-    PainPoints: List[str]
-    CriticalRisks: List[str]
+    Good: List[str]
+    Bad: List[str]
+    Ugly: List[str]
     SolutionSummary: str
     WorkflowOutline: List[str]
-    AgentMap: List[Dict[str, Any]]
-    ToolHooks: List[str]
     HAF: Dict[str, Any]
     CII: Dict[str, Any]
 
@@ -72,15 +69,20 @@ class GraphState(TypedDict):
 # ─── LLM Init ───────────────────────────────────────────────────────────────────
 llm = ChatOpenAI(
     model_name="gpt-4o-mini",
-    temperature=0.7,
+    temperature=0.0,
     openai_api_key=OPENAI_API_KEY,
 )
 
 # ─── Nodes ─────────────────────────────────────────────────────────────────────
-def bootstrap_node(state: GraphState) -> dict:
-    logger.info("[BOOTSTRAP] Intake acknowledged.")
-    return {}
-
+def inject_test_data_node(state: dict) -> dict:
+    if os.getenv("TEST_MODE", "false").lower() == "true":
+        logger.info("[TEST_CLIENT] Test mode active. Loading randomized sample.")
+        with open(os.path.join(BASE_DIR, "test_data_samples.json"), encoding="utf-8") as f:
+            test_clients = json.load(f)
+        selected = random.choice(test_clients)
+        return {"intake": ClientIntake(**selected)}
+    else:
+        return state
 
 def summarizer_node(state: GraphState) -> dict:
     raw_json = json.dumps(state["intake"].model_dump(), indent=2)
@@ -98,7 +100,6 @@ def summarizer_node(state: GraphState) -> dict:
     except ValidationError as e:
         logger.error(f"[SUMMARIZER] Validation failed: {e}")
         raise
-
 
 def report_node(state: GraphState) -> dict:
     summary_json = json.dumps(state["summary"].model_dump(), indent=2)
@@ -122,10 +123,11 @@ def report_node(state: GraphState) -> dict:
 
 # ─── Build Graph ───────────────────────────────────────────────────────────────
 builder = StateGraph(GraphState)
-builder.add_node(START, bootstrap_node)
+builder.add_node("inject_test", inject_test_data_node)
 builder.add_node("summarize", summarizer_node)
 builder.add_node("report", report_node)
-builder.add_edge(START, "summarize")
+builder.add_edge(START, "inject_test")
+builder.add_edge("inject_test", "summarize")
 builder.add_edge("summarize", "report")
 builder.add_edge("report", END)
 
@@ -134,6 +136,7 @@ graph = builder.compile()
 # ─── Public API ─────────────────────────────────────────────────────────────────
 def run_pipeline(raw_intake: dict) -> Any:
     intake_model = ClientIntake(**raw_intake)
+    os.environ["TEST_MODE"] = str(os.getenv("TEST_MODE", "false"))
     result = graph.invoke({"intake": intake_model})
     return {
         "client_report": result["client_report"].report_markdown,
@@ -145,6 +148,7 @@ if __name__ == "__main__":
     test_file = os.path.join(BASE_DIR, "sample_intake.json")
     with open(test_file, encoding="utf-8") as f:
         sample = json.load(f)
+    os.environ["TEST_MODE"] = "true"
     out = run_pipeline(sample)
     print("\n==== CLIENT REPORT ====")
     print(out["client_report"])
