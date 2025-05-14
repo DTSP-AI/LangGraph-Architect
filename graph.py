@@ -100,12 +100,13 @@ def inject_test_data_node(state: dict) -> dict:
         intake = ClientIntake(**raw)
         logger.info(f"[TEST_CLIENT] Injected intake for {intake.ClientProfile.get('name')}")
         return {"intake": intake}
-    # No injection—leave intake untouched
     return {}
 
 # ─── Agent 2: Summarize Intake Data ────────────────────────────────────────────
 def summarizer_node(state: GraphState) -> dict:
-    raw_intake = state["intake"].model_dump()  # Pydantic V2; use .dict() if V1
+    # Pydantic V2:
+    raw_intake = state["intake"].model_dump()
+    # (If you're on Pydantic V1, use state["intake"].dict() here instead)
     messages = [
         SystemMessage(content=agent1_prompt["system"] + "\n\n" + multi_kb),
         HumanMessage(content=agent1_prompt["user_template"].replace(
