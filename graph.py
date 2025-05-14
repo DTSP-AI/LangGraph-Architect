@@ -1,4 +1,4 @@
-# C:\AI_src\LangGraph-Architect\graph.py
+# File: C:\AI_src\LangGraph-Architect\graph.py
 
 import os
 import json
@@ -77,7 +77,6 @@ llm = ChatOpenAI(
 
 # ─── Helpers ───────────────────────────────────────────────────────────────────
 def strip_outer_fences(text: str) -> str:
-    # Remove a single leading ``` block and trailing ``` block, if present
     text = re.sub(r"^```[\w]*\n", "", text)
     text = re.sub(r"\n```$", "", text)
     return text.strip()
@@ -124,10 +123,11 @@ def report_node(state: GraphState) -> dict:
 
 # ─── Build Graph ───────────────────────────────────────────────────────────────
 builder = StateGraph(GraphState)
-builder.add_node(START, bootstrap_node)
+builder.add_node("bootstrap", bootstrap_node)
 builder.add_node("summarize", summarizer_node)
 builder.add_node("report", report_node)
-builder.add_edge(START, "summarize")
+builder.add_edge(START, "bootstrap")
+builder.add_edge("bootstrap", "summarize")
 builder.add_edge("summarize", "report")
 builder.add_edge("report", END)
 
@@ -148,5 +148,5 @@ if __name__ == "__main__":
     with open(test_file, encoding="utf-8") as f:
         sample = json.load(f)
     out = run_pipeline(sample)
-    print("\n==== CLIENT REPORT ====\n", out["client_report"])
-    print("\n==== DEV REPORT ====\n", out["dev_report"])
+    print("\n==== CLIENT REPORT ====" , out["client_report"])
+    print("\n==== DEV REPORT ====" , out["dev_report"])
