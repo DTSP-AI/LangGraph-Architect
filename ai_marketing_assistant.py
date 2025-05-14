@@ -1,4 +1,4 @@
-#LangGraph-Architect\ai_marketing_assistant.py
+# LangGraph-Architect\ai_marketing_assistant.py
 
 import os
 import json
@@ -99,13 +99,13 @@ if st.button("🧠 Generate Full Report & Scope"):
     with st.spinner("Processing…"):
         raw_data = {
             "ClientProfile": {
-                "name":     user_name,
-                "business": business_name,
-                "website":  website,
-                "industry": industry,
-                "location": location,
-                "revenue":  annual_revenue,
-                "employees": employees
+                "name":       user_name,
+                "business":   business_name,
+                "website":    website,
+                "industry":   industry,
+                "location":   location,
+                "revenue":    annual_revenue,
+                "employees":  employees
             },
             "SalesOps": {
                 "sales_process": sales_process,
@@ -144,17 +144,17 @@ if st.button("🧠 Generate Full Report & Scope"):
                 "timeline":   timeline
             },
             "HAF": {
-                "roles":     haf_roles,
-                "workflows": haf_workflows,
-                "agents":    haf_agents
+                "CriticalRoles":   haf_roles,
+                "KeyWorkflows":    haf_workflows,
+                "AIEligibleTasks": haf_agents
             },
             "CII": {
-                "memory":       memory_needs,
-                "tools":        agent_tools_cfg,
-                "compliance":   compliance_flags,
-                "latency": {
-                    "realtime": realtime_flows,
-                    "async":    async_flows
+                "MemoryRequirements": memory_needs,
+                "ToolsRequired":       agent_tools_cfg,
+                "SecurityNotes":       compliance_flags,
+                "Latency": {
+                    "Realtime": realtime_flows,
+                    "Async":    async_flows
                 }
             },
             "ReferenceDocs": kodey_docs
