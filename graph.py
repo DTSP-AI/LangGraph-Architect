@@ -2,6 +2,7 @@
 
 import os
 import json
+import re
 import logging
 from typing import TypedDict, Any, List, Dict
 from pydantic import BaseModel, ValidationError
@@ -47,13 +48,11 @@ class ClientIntake(BaseModel):
 
 class IntakeSummary(BaseModel):
     ClientProfile: Dict[str, Any]
-    Highlights: List[str]
-    PainPoints: List[str]
-    CriticalRisks: List[str]
+    Good: List[str]
+    Bad: List[str]
+    Ugly: List[str]
     SolutionSummary: str
     WorkflowOutline: List[str]
-    AgentMap: List[Dict[str, Any]]
-    ToolHooks: List[str]
     HAF: Dict[str, Any]
     CII: Dict[str, Any]
 
@@ -76,11 +75,17 @@ llm = ChatOpenAI(
     openai_api_key=OPENAI_API_KEY,
 )
 
+# ─── Helpers ───────────────────────────────────────────────────────────────────
+def strip_outer_fences(text: str) -> str:
+    # Remove a single leading ``` block and trailing ``` block, if present
+    text = re.sub(r"^```[\w]*\n", "", text)
+    text = re.sub(r"\n```$", "", text)
+    return text.strip()
+
 # ─── Nodes ─────────────────────────────────────────────────────────────────────
 def bootstrap_node(state: GraphState) -> dict:
     logger.info("[BOOTSTRAP] Intake acknowledged.")
     return {}
-
 
 def summarizer_node(state: GraphState) -> dict:
     raw_json = json.dumps(state["intake"].model_dump(), indent=2)
@@ -88,17 +93,14 @@ def summarizer_node(state: GraphState) -> dict:
         SystemMessage(content=agent1_prompt["system"] + "\n\n" + multi_kb),
         HumanMessage(content=agent1_prompt["user_template"].replace("{RAW_INTAKE_JSON}", raw_json))
     ]
-    response = llm.invoke(messages)
+    response = llm(messages)
+    content = strip_outer_fences(response.content)
     try:
-        content = response.content.strip()
-        if content.startswith("```"):
-            content = "\n".join(line for line in content.splitlines() if not line.strip().startswith("```")).strip()
         summary = IntakeSummary.parse_raw(content)
         return {"summary": summary}
     except ValidationError as e:
-        logger.error(f"[SUMMARIZER] Validation failed: {e}")
+        logger.error(f"[SUMMARIZER] Validation failed:\n{e}\nResponse content:\n{content}")
         raise
-
 
 def report_node(state: GraphState) -> dict:
     summary_json = json.dumps(state["summary"].model_dump(), indent=2)
@@ -106,18 +108,18 @@ def report_node(state: GraphState) -> dict:
         SystemMessage(content=agent2_prompt["system"] + "\n\n" + core_kb + "\n" + tools_kb),
         HumanMessage(content=agent2_prompt["user_template"].replace("{SUMMARY_JSON}", summary_json))
     ]
-    response = llm.invoke(messages)
+    response = llm(messages)
+    content = strip_outer_fences(response.content)
     try:
-        content = response.content.strip()
-        if content.startswith("```"):
-            content = "\n".join(line for line in content.splitlines() if not line.strip().startswith("```")).strip()
         data = json.loads(content)
+        client_md = data.get("client_report", "")
+        dev_blueprint = data.get("developer_report", "")
         return {
-            "client_report": ClientFacingReport(report_markdown=data.get("client_report", "")),
-            "dev_report": DevFacingReport(blueprint_graph=data.get("developer_report", ""))
+            "client_report": ClientFacingReport(report_markdown=client_md),
+            "dev_report": DevFacingReport(blueprint_graph=dev_blueprint)
         }
     except (json.JSONDecodeError, ValidationError) as e:
-        logger.error(f"[REPORT] Parsing failed: {e}")
+        logger.error(f"[REPORT] Parsing failed:\n{e}\nResponse content:\n{content}")
         raise
 
 # ─── Build Graph ───────────────────────────────────────────────────────────────
@@ -132,7 +134,7 @@ builder.add_edge("report", END)
 graph = builder.compile()
 
 # ─── Public API ─────────────────────────────────────────────────────────────────
-def run_pipeline(raw_intake: dict) -> Any:
+def run_pipeline(raw_intake: dict) -> Dict[str, str]:
     intake_model = ClientIntake(**raw_intake)
     result = graph.invoke({"intake": intake_model})
     return {
@@ -146,7 +148,5 @@ if __name__ == "__main__":
     with open(test_file, encoding="utf-8") as f:
         sample = json.load(f)
     out = run_pipeline(sample)
-    print("\n==== CLIENT REPORT ====")
-    print(out["client_report"])
-    print("\n==== DEV REPORT ====")
-    print(out["dev_report"])
+    print("\n==== CLIENT REPORT ====\n", out["client_report"])
+    print("\n==== DEV REPORT ====\n", out["dev_report"])
