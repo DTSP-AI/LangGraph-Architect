@@ -1,230 +1,235 @@
-# ai_marketing_assistant.py
+# streamlit_ui.py
 
 import os
-import json
 import streamlit as st
 from dotenv import load_dotenv
 from graph import run_pipeline, supervisor_chain
 
-# ─── Load environment ───────────────────────────────────────────────────────────
+# ─── Load environment variables ─────────────────────────────────────────────────
 load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 if not OPENAI_API_KEY:
     st.error("🔑 OPENAI_API_KEY not set in environment!")
     st.stop()
 
-# ─── Load UI configuration ─────────────────────────────────────────────────────
-CONFIG_PATH = os.path.join("config", "ui_options.json")
-try:
-    with open(CONFIG_PATH, encoding="utf-8") as f:
-        ui_opts = json.load(f)
-        CHANNEL_OPTIONS = ui_opts.get("channels", [])
-        TOOL_OPTIONS    = ui_opts.get("tools", [])
-except Exception:
-    CHANNEL_OPTIONS = ["Google Ads", "Meta Ads", "TikTok", "SEO", "Influencer", "Referral", "Events"]
-    TOOL_OPTIONS    = ["Calendly", "Shopify", "Squarespace", "Twilio", "Stripe", "Zapier", "Klaviyo", "Mailchimp", "GoHighLevel"]
-
-# ─── Streamlit UI Setup ─────────────────────────────────────────────────────────
+# ─── Streamlit page configuration ────────────────────────────────────────────────
 st.set_page_config(page_title="AI Business Optimization Intake", layout="wide")
 st.title("🧠 AI Solutions Discovery & Optimization Intake")
 
-# ─── Sidebar Intake Form ────────────────────────────────────────────────────────
-with st.sidebar:
-    st.header("📋 Business Intake Form")
-
-    # persist each field in session_state
-    def text_input_state(key, label):
-        if key not in st.session_state:
-            st.session_state[key] = ""
-        st.session_state[key] = st.text_input(label, value=st.session_state[key])
-        return st.session_state[key]
-
-    def number_input_state(key, label, **kwargs):
-        if key not in st.session_state:
-            st.session_state[key] = kwargs.get("value", 0)
-        st.session_state[key] = st.number_input(label, value=st.session_state[key], **{k:v for k,v in kwargs.items() if k!="value"})
-        return st.session_state[key]
-
-    def textarea_state(key, label):
-        if key not in st.session_state:
-            st.session_state[key] = ""
-        st.session_state[key] = st.text_area(label, value=st.session_state[key])
-        return st.session_state[key]
-
-    def selectbox_state(key, label, options):
-        if key not in st.session_state:
-            st.session_state[key] = options[0]
-        st.session_state[key] = st.selectbox(label, options, index=options.index(st.session_state[key]) if st.session_state[key] in options else 0)
-        return st.session_state[key]
-
-    def multiselect_state(key, label, options):
-        if key not in st.session_state:
-            st.session_state[key] = []
-        st.session_state[key] = st.multiselect(label, options, default=st.session_state[key])
-        return st.session_state[key]
-
-    def slider_state(key, label, min_value, max_value, value):
-        if key not in st.session_state:
-            st.session_state[key] = value
-        st.session_state[key] = st.slider(label, min_value, max_value, st.session_state[key])
-        return st.session_state[key]
-
-    user_name      = text_input_state("user_name", "Your Name")
-    business_name  = text_input_state("business_name", "Business Name")
-    website        = text_input_state("website", "Business Website")
-    industry       = selectbox_state("industry", "Industry", ["Jewelry", "Med Spa", "Real Estate", "Fitness", "Other"])
-    location       = text_input_state("location", "Location")
-    annual_revenue = number_input_state("annual_revenue", "Annual Revenue (USD)", min_value=0, step=1000, format="%d", value=0)
-    employees      = number_input_state("employees", "Number of Employees", min_value=0, step=1, format="%d", value=0)
-
-    sales_process        = textarea_state("sales_process", "Describe your current sales process:")
-    lead_tools           = textarea_state("lead_tools", "What tools do you currently use for leads and appointments?")
-    has_crm              = selectbox_state("has_crm", "Do you use a CRM?", ["Yes", "No"])
-    crm_name             = text_input_state("crm_name", "Which CRM do you use (if any)?")
-    booking_process      = textarea_state("booking_process", "How are appointments currently booked?")
-    follow_up            = textarea_state("follow_up", "How do you track follow-ups or missed leads?")
-
-    channels             = multiselect_state("channels", "Active Marketing Channels", CHANNEL_OPTIONS)
-    lead_routing         = textarea_state("lead_routing", "How are leads captured and routed?")
-    lead_action          = textarea_state("lead_action", "Describe what happens after a lead comes in:")
-    existing_automations = textarea_state("existing_automations", "Any automations currently in place?")
-
-    sales_cycle          = slider_state("sales_cycle", "Average Sales Cycle (days)", 1, 180, 30)
-    follow_up_tactics    = textarea_state("follow_up_tactics", "How do you follow up with missed calls, abandoned carts, or no-shows?")
-    retention_programs   = textarea_state("retention_programs", "Any current loyalty, membership, or re-engagement programs?")
-
-    uses_ai              = selectbox_state("uses_ai", "Are you using AI currently?", ["Yes", "No"])
-    ai_tools             = textarea_state("ai_tools", "If yes, describe your AI tools or setup:")
-    manual_areas         = multiselect_state("manual_areas", "Where do you spend the most manual time?", ["Lead follow-up", "Appointment setting", "Content creation", "Customer questions"])
-    dream_auto           = textarea_state("dream_auto", "What would you automate tomorrow if it worked perfectly?")
-
-    tools                = multiselect_state("tools", "Current Tools in Use", TOOL_OPTIONS)
-    api_access           = selectbox_state("api_access", "Do you have admin/API access to these tools?", ["Yes", "No", "Not sure"])
-    comms                = selectbox_state("comms", "Preferred customer communication method:", ["Text", "Email", "Phone", "DMs", "Website Chat"])
-
-    goals           = textarea_state("goals", "Top 3 revenue goals (next 6 months):")
-    biggest_problem = textarea_state("biggest_problem", "What’s the #1 problem you’re trying to solve right now?")
-    comfort         = selectbox_state("comfort", "Comfort level with automation/AI:", ["Bring on the robots", "Need guidance", "Start simple"])
-    engagement      = selectbox_state("engagement", "Preferred engagement model:", ["Done-For-You", "Hybrid", "DIY with Support"])
-    timeline        = selectbox_state("timeline", "Implementation timeline:", ["<30 days", "30-60 days", "60-90 days", "Flexible"])
-
-    with st.expander("🔰 HAF (Hierarchical Agent Framework)"):
-        haf_roles     = textarea_state("haf_roles", "List critical roles and responsibilities")
-        haf_workflows = textarea_state("haf_workflows", "Map key workflows (e.g., Lead → Sale → Delivery)")
-        haf_agents    = textarea_state("haf_agents", "Which tasks could be delegated to AI agents?")
-
-    with st.expander("🧩 CII (Cognitive Infrastructure Intake)"):
-        memory_needs    = textarea_state("memory_needs", "What memory or data history do agents need?")
-        agent_tools_cfg = textarea_state("agent_tools_cfg", "List specific APIs/tools needed for each agent")
-        compliance_flag = textarea_state("compliance_flag", "Any compliance or regulatory constraints?")
-        realtime_flows  = textarea_state("realtime_flows", "Which workflows need real-time execution?")
-        async_flows     = textarea_state("async_flows", "Which can run in background or off-hours?")
-
-# ─── Generate Reports ────────────────────────────────────────────────────────────
-if st.sidebar.button("🧠 Generate Full Report & Scope"):
-    progress = st.sidebar.progress(0)
-    with st.spinner("Processing…"):
-        try:
-            progress.progress(20)
-            raw_data = {
-                "ClientProfile": {
-                    "name":      user_name,
-                    "business":  business_name,
-                    "website":   website,
-                    "industry":  industry,
-                    "location":  location,
-                    "revenue":   annual_revenue,
-                    "employees": employees
-                },
-                "SalesOps": {
-                    "sales_process": sales_process,
-                    "lead_tools":    lead_tools,
-                    "crm":           crm_name if has_crm == "Yes" else "None",
-                    "booking":       booking_process,
-                    "followups":     follow_up
-                },
-                "Marketing": {
-                    "channels":    channels,
-                    "routing":     lead_routing,
-                    "post_lead":   lead_action,
-                    "automations": existing_automations
-                },
-                "Retention": {
-                    "sales_cycle":       sales_cycle,
-                    "follow_up_tactics": follow_up_tactics,
-                    "programs":          retention_programs
-                },
-                "AIReadiness": {
-                    "uses_ai":      uses_ai,
-                    "tools":        ai_tools,
-                    "manual_areas": manual_areas,
-                    "dream":        dream_auto
-                },
-                "TechStack": {
-                    "tools":      tools,
-                    "api_access": api_access,
-                    "comms":      comms
-                },
-                "GoalsTimeline": {
-                    "goals":      goals,
-                    "problem":    biggest_problem,
-                    "comfort":    comfort,
-                    "engagement": engagement,
-                    "timeline":   timeline
-                },
-                "HAF": {
-                    "CriticalRoles":   haf_roles,
-                    "KeyWorkflows":    haf_workflows,
-                    "AIEligibleTasks": haf_agents
-                },
-                "CII": {
-                    "MemoryRequirements": memory_needs,
-                    "ToolsRequired":       agent_tools_cfg,
-                    "SecurityNotes":       compliance_flag,
-                    "Latency": {
-                        "Realtime": realtime_flows,
-                        "Async":    async_flows
-                    }
-                },
-                "ReferenceDocs": ""
+# ─── Initialize namespaced intake data in session_state ──────────────────────────
+if "intake_data" not in st.session_state:
+    st.session_state.intake_data = {
+        "ClientProfile": {
+            "name": "",
+            "business": "",
+            "website": "",
+            "industry": "",
+            "location": "",
+            "revenue": 0,
+            "employees": 0
+        },
+        "SalesOps": {
+            "sales_process": "",
+            "lead_tools": "",
+            "crm": "",
+            "booking": "",
+            "followups": ""
+        },
+        "Marketing": {
+            "channels": [],
+            "routing": "",
+            "post_lead": "",
+            "automations": ""
+        },
+        "Retention": {
+            "sales_cycle": 30,
+            "follow_up_tactics": "",
+            "programs": ""
+        },
+        "AIReadiness": {
+            "uses_ai": "",
+            "tools": "",
+            "manual_areas": [],
+            "dream": ""
+        },
+        "TechStack": {
+            "tools": [],
+            "api_access": "",
+            "comms": ""
+        },
+        "GoalsTimeline": {
+            "goals": "",
+            "problem": "",
+            "comfort": "",
+            "engagement": "",
+            "timeline": ""
+        },
+        "HAF": {
+            "CriticalRoles": "",
+            "KeyWorkflows": "",
+            "AIEligibleTasks": ""
+        },
+        "CII": {
+            "MemoryRequirements": "",
+            "ToolsRequired": "",
+            "SecurityNotes": "",
+            "Latency": {
+                "Realtime": "",
+                "Async": ""
             }
-            progress.progress(50)
-            # run the full pipeline
-            out = run_pipeline(raw_data)
-            progress.progress(80)
-            # display reports
-            st.subheader("📄 Client-Facing Report")
-            st.markdown(out["client_report"], unsafe_allow_html=True)
-            st.subheader("📋 Dev-Facing Blueprint")
-            st.markdown(out["dev_report"], unsafe_allow_html=True)
-            progress.progress(100)
-        except KeyError as ke:
-            st.error(f"⚠️ Missing field: {ke}")
-        except ValueError as ve:
-            st.error(f"⚠️ Invalid value: {ve}")
-        except Exception as e:
-            st.error(f"❌ Unexpected error: {e}")
+        },
+        "ReferenceDocs": ""
+    }
 
-# ─── Supervisor Chat (pinned) ───────────────────────────────────────────────────
-st.markdown("---")
-st.header("💬 Supervisor Agent Chat")
+if "intake_complete" not in st.session_state:
+    st.session_state.intake_complete = False
+
+if "reports" not in st.session_state:
+    st.session_state.reports = {}
 
 if "supervisor_history" not in st.session_state:
     st.session_state.supervisor_history = []
 
-chat_container = st.container()
-with chat_container:
-    # render past messages
-    for msg in st.session_state.supervisor_history:
-        st.chat_message(msg["role"]).write(msg["content"])
-    # input box
-    user_input = st.chat_input("Ask the Supervisor Agent…")
-    if user_input:
-        st.session_state.supervisor_history.append({"role": "user", "content": user_input})
-        resp = supervisor_chain.invoke({
-            "history": st.session_state.supervisor_history,
-            "user_input": user_input
-        })
-        assistant_content = resp.content.strip()
-        st.session_state.supervisor_history.append({"role": "assistant", "content": assistant_content})
-        # on next rerun, chat_container will display updated history
+# ─── Sidebar: Mirrored Intake Form ────────────────────────────────────────────────
+if not st.session_state.intake_complete:
+    with st.sidebar:
+        st.header("📋 Business Intake Form")
+
+        cp = st.session_state.intake_data["ClientProfile"]
+        cp["name"] = st.text_input("Your Name", value=cp["name"])
+        cp["business"] = st.text_input("Business Name", value=cp["business"])
+        cp["website"] = st.text_input("Business Website", value=cp["website"])
+        industries = ["Jewelry","Med Spa","Real Estate","Fitness","Other"]
+        cp["industry"] = st.selectbox(
+            "Industry", industries,
+            index=industries.index(cp["industry"]) if cp["industry"] in industries else 0
+        )
+        cp["location"] = st.text_input("Location", value=cp["location"])
+        cp["revenue"] = st.number_input(
+            "Annual Revenue (USD)", min_value=0, step=1000, format="%d", value=cp["revenue"]
+        )
+        cp["employees"] = st.number_input(
+            "Number of Employees", min_value=0, step=1, format="%d", value=cp["employees"]
+        )
+
+        so = st.session_state.intake_data["SalesOps"]
+        so["sales_process"] = st.text_area("Describe your current sales process:", value=so["sales_process"])
+        so["lead_tools"] = st.text_area("Tools for leads & appointments:", value=so["lead_tools"])
+        so["crm"] = st.text_input("Which CRM do you use?", value=so["crm"])
+        so["booking"] = st.text_area("How are appointments booked?", value=so["booking"])
+        so["followups"] = st.text_area("How do you track follow-ups/missed leads?", value=so["followups"])
+
+        mk = st.session_state.intake_data["Marketing"]
+        channels = ["Google Ads","Meta Ads","TikTok","SEO","Influencer","Referral","Events"]
+        mk["channels"] = st.multiselect("Active Marketing Channels", channels, default=mk["channels"])
+        mk["routing"] = st.text_area("How are leads captured/routed?", value=mk["routing"])
+        mk["post_lead"] = st.text_area("What happens after a lead comes in?", value=mk["post_lead"])
+        mk["automations"] = st.text_area("Any automations currently in place?", value=mk["automations"])
+
+        rt = st.session_state.intake_data["Retention"]
+        rt["sales_cycle"] = st.slider("Average Sales Cycle (days)", 1, 180, value=rt["sales_cycle"])
+        rt["follow_up_tactics"] = st.text_area("Follow-up tactics:", value=rt["follow_up_tactics"])
+        rt["programs"] = st.text_area("Loyalty/membership programs:", value=rt["programs"])
+
+        ar = st.session_state.intake_data["AIReadiness"]
+        uses_ai_opts = ["Yes","No"]
+        ar["uses_ai"] = st.selectbox("Are you using AI?", uses_ai_opts,
+                                     index=uses_ai_opts.index(ar["uses_ai"]) if ar["uses_ai"] in uses_ai_opts else 1)
+        ar["tools"] = st.text_area("If yes, describe your AI tools:", value=ar["tools"])
+        manual_opts = ["Lead follow-up","Appointment setting","Content creation","Customer questions"]
+        ar["manual_areas"] = st.multiselect("Where most manual time spent?", manual_opts, default=ar["manual_areas"])
+        ar["dream"] = st.text_area("Dream automation (perfect world):", value=ar["dream"])
+
+        ts = st.session_state.intake_data["TechStack"]
+        tool_opts = ["Calendly","Shopify","Squarespace","Twilio","Stripe","Zapier","Klaviyo","Mailchimp","GoHighLevel"]
+        ts["tools"] = st.multiselect("Current Tools in Use", tool_opts, default=ts["tools"])
+        api_opts = ["Yes","No","Not sure"]
+        ts["api_access"] = st.selectbox("Admin/API access to these tools?", api_opts,
+                                        index=api_opts.index(ts["api_access"]) if ts["api_access"] in api_opts else 2)
+        comms_opts = ["Text","Email","Phone","DMs","Website Chat"]
+        ts["comms"] = st.selectbox("Preferred communication:", comms_opts,
+                                   index=comms_opts.index(ts["comms"]) if ts["comms"] in comms_opts else 0)
+
+        gt = st.session_state.intake_data["GoalsTimeline"]
+        gt["goals"] = st.text_area("Top 3 revenue goals (6 mo):", value=gt["goals"])
+        gt["problem"] = st.text_area("#1 problem to solve:", value=gt["problem"])
+        comfort_opts = ["Bring on the robots","Need guidance","Start simple"]
+        gt["comfort"] = st.selectbox("Comfort with automation/AI:", comfort_opts,
+                                     index=comfort_opts.index(gt["comfort"]) if gt["comfort"] in comfort_opts else 2)
+        engagement_opts = ["Done-For-You","Hybrid","DIY with Support"]
+        gt["engagement"] = st.selectbox("Preferred engagement model:", engagement_opts,
+                                        index=engagement_opts.index(gt["engagement"]) if gt["engagement"] in engagement_opts else 0)
+        timeline_opts = ["<30 days","30-60 days","60-90 days","Flexible"]
+        gt["timeline"] = st.selectbox("Implementation timeline:", timeline_opts,
+                                      index=timeline_opts.index(gt["timeline"]) if gt["timeline"] in timeline_opts else 0)
+
+        haf = st.session_state.intake_data["HAF"]
+        with st.expander("🔰 HAF (Hierarchical Agent Framework)"):
+            haf["CriticalRoles"] = st.text_area("Critical roles & responsibilities:", value=haf["CriticalRoles"])
+            haf["KeyWorkflows"]    = st.text_area("Key workflows map:", value=haf["KeyWorkflows"])
+            haf["AIEligibleTasks"] = st.text_area("Tasks for AI agents:", value=haf["AIEligibleTasks"])
+
+        cii = st.session_state.intake_data["CII"]
+        with st.expander("🧩 CII (Cognitive Infrastructure Intake)"):
+            cii["MemoryRequirements"] = st.text_area("Memory/data needs:", value=cii["MemoryRequirements"])
+            cii["ToolsRequired"]      = st.text_area("APIs/tools needed:", value=cii["ToolsRequired"])
+            cii["SecurityNotes"]      = st.text_area("Compliance constraints:", value=cii["SecurityNotes"])
+            lat = cii["Latency"]
+            lat["Realtime"] = st.text_area("Real-time workflows:", value=lat["Realtime"])
+            lat["Async"]    = st.text_area("Background/async workflows:", value=lat["Async"])
+
+        # ── Enable Generate only when required fields are populated ──────────────────
+        required_keys = [
+            ("ClientProfile","name"), ("ClientProfile","business"), ("ClientProfile","website"),
+            ("ClientProfile","industry"), ("ClientProfile","location"),
+            ("SalesOps","sales_process"), ("SalesOps","lead_tools"), ("SalesOps","crm"),
+            ("GoalsTimeline","goals"), ("GoalsTimeline","problem")
+        ]
+        ready = True
+        for section, key in required_keys:
+            val = st.session_state.intake_data[section][key]
+            if val in [None, "", [], 0]:
+                ready = False
+                break
+
+        if st.sidebar.button("🧠 Generate Full Report & Scope", disabled=not ready):
+            raw_data = st.session_state.intake_data.copy()
+            result   = run_pipeline(raw_data)
+            if isinstance(result, dict) and "error" in result:
+                err = result["error"]
+                if isinstance(err, list):
+                    for e in err:
+                        st.error(f"❌ Pipeline error in node '{e.get('node')}': {e.get('message')}")
+                else:
+                    st.error(f"❌ Pipeline error in node '{err.get('node')}': {err.get('message')}")
+            else:
+                st.session_state.intake_complete = True
+                st.session_state.reports = result
+
+# ─── Main area: separator + Supervisor Chat + Reports ───────────────────────────
+st.markdown("---")
+st.header("💬 Supervisor Agent Chat")
+
+# render chat history
+for msg in st.session_state.supervisor_history:
+    st.chat_message(msg["role"]).write(msg["content"])
+
+# handle new chat input
+user_input = st.chat_input("Ask the Supervisor Agent…")
+if user_input:
+    st.session_state.supervisor_history.append({"role": "user", "content": user_input})
+    resp = supervisor_chain.invoke({
+        "history":    st.session_state.supervisor_history,
+        "user_input": user_input
+    })
+    assistant_content = resp.content.strip()
+    st.session_state.supervisor_history.append({"role": "assistant", "content": assistant_content})
+    st.experimental_rerun()
+
+# once intake is complete, show reports
+if st.session_state.intake_complete:
+    out = st.session_state.reports
+    st.subheader("📄 Client-Facing Report")
+    st.markdown(out["client_report"], unsafe_allow_html=True)
+    st.subheader("📋 Dev-Facing Blueprint")
+    st.markdown(out["dev_report"], unsafe_allow_html=True)

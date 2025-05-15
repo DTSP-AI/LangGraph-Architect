@@ -1,27 +1,31 @@
 version: "3.8"
 
 services:
-  web:
-    build: .
-    command: ["streamlit", "run", "streamlit_ui.py"]
-    ports:
-      - "8501:8501"
-    environment:
-      OPENAI_API_KEY: ${OPENAI_API_KEY}
-      PGVECTOR_CONNECTION_STRING: "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}"
-    depends_on:
-      - postgres
 
   postgres:
     image: postgres:15
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-your_user}
+      POSTGRES_USER:  langgraph
       POSTGRES_PASSWORD: RickSanchez2025
-      POSTGRES_DB: ${POSTGRES_DB:-your_db}
+      POSTGRES_DB:    langgraph
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - ./docker-entrypoint-initdb.d/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     ports:
       - "5432:5432"
+
+  web:
+    build: .
+    ports:
+      - "8501:8501"
+    environment:
+      OPENAI_API_KEY:              ${OPENAI_API_KEY}
+      PGVECTOR_CONNECTION_STRING:  "postgresql://langgraph:RickSanchez2025@postgres:5432/langgraph"
+      PGVECTOR_COLLECTION_NAME:    "ai_pipeline_memory"
+      VECTOR_DECAY_RATE:           "0.01"
+      VECTOR_RETRIEVAL_K:          "6"
+    depends_on:
+      - postgres
 
 volumes:
   pgdata:
