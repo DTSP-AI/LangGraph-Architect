@@ -24,4 +24,4 @@ This project provides an AI-powered intake form to analyze and optimize business
 
 ```bash
 pip install -r requirements.txt
-streamlit run ai_marketing_assistant.py
+streamlit run streamlit_ui.py

@@ -18,4 +18,4 @@ EXPOSE 8501
 ENV OPENAI_API_KEY=""
 
 # Launch the app
-CMD ["streamlit", "run", "ai_marketing_assistant.py", "--server.port=8501", "--server.address=0.0.0.0"]
+CMD ["streamlit", "run", "streamlit_ui.py", "--server.port=8501", "--server.address=0.0.0.0"]
