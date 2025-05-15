@@ -15,6 +15,14 @@ from langchain.schema import SystemMessage, HumanMessage
 from langchain.tools import SerpAPIWrapper
 from langgraph.graph import StateGraph, START, END
 
+# For building the Supervisor chat chain
+from langchain.prompts import (
+    ChatPromptTemplate,
+    MessagesPlaceholder,
+    SystemMessagePromptTemplate,
+    HumanMessagePromptTemplate,
+)
+
 # ─── Memory Manager ─────────────────────────────────────────────────────────────
 from memory_manager import (
     get_chat_history,
@@ -39,10 +47,16 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 ##############################################
-# Prompt & KB Loading (preserve formatting)
+# Prompt & Knowledge-Base Loading
 ##############################################
 def load_prompt(path: str) -> Dict[str, str]:
-    raw = json.load(open(path, encoding="utf-8"))
+    """
+    Load a JSON prompt file where 'system' and 'user_template'
+    may be arrays of lines or a single string.
+    Returns a dict with joined strings.
+    """
+    with open(path, encoding="utf-8") as f:
+        raw = json.load(f)
     system = "\n".join(raw["system"]) if isinstance(raw["system"], list) else raw["system"]
     user   = "\n".join(raw["user_template"]) if isinstance(raw["user_template"], list) else raw["user_template"]
     return {"system": system, "user": user}
@@ -107,33 +121,38 @@ search_tool = SerpAPIWrapper(api_key=SERPAPI_API_KEY)
 # Helpers
 ##############################################
 def strip_fences(text: str) -> str:
+    """Remove markdown code fences from LLM output."""
     text = re.sub(r"^```[\w]*\n", "", text, flags=re.MULTILINE)
     text = re.sub(r"\n```$", "", text, flags=re.MULTILINE)
     return text.strip()
 
 def robust_invoke(messages: List[Any]) -> Any:
+    """Invoke the LLM with retries and exponential backoff."""
     for attempt in range(3):
         try:
             return llm.invoke(messages)
         except Exception as e:
             logger.warning(f"LLM invoke failed (attempt {attempt+1}/3): {e}")
             time.sleep(2 ** attempt)
-    logger.error("LLM permanently failed after 3 retries", exc_info=True)
+    logger.error("LLM invoke permanently failed after 3 attempts", exc_info=True)
     raise
 
 ##############################################
 # Node 1: Supervisor Agent
 ##############################################
 def supervisor_node(state: GraphState) -> dict:
+    """
+    Supervisor Agent:
+      - Clears any prior history for a fresh intake
+      - Validates and optionally enriches state['intake'] via chat
+      - Records conversation in memory
+    """
     try:
-        # Always use the provided intake; no test injection
         intake_model = state["intake"]
 
-        # Optionally clear chat history between distinct intake sessions
         session_id = intake_model.ClientProfile.get("name", "default")
         clear_chat_history(session_id)
 
-        # Build context: system prompt + history + intake snapshot + vector memory
         history = get_chat_history(session_id)
         msgs = [ SystemMessage(content=supervisor_prompt["system"]) ]
         msgs.extend(history.messages)
@@ -147,15 +166,14 @@ def supervisor_node(state: GraphState) -> dict:
         resp = robust_invoke(msgs)
         content = strip_fences(resp.content)
 
-        # Record conversation and update memory
         history.add_user_message(snapshot)
         history.add_ai_message(content)
         add_to_vector_memory(content, metadata={"session_id": session_id})
 
-        # Parse and validate enriched intake
         parsed = json.loads(content)
         validated = parsed.get("validated_intake", parsed)
         intake_model = ClientIntake(**validated)
+
         logger.info("[SUPERVISOR] Intake validated/enriched")
         return {"intake": intake_model}
     except Exception as e:
@@ -166,6 +184,10 @@ def supervisor_node(state: GraphState) -> dict:
 # Node 2: Web Search Agent
 ##############################################
 def websearch_node(state: GraphState) -> dict:
+    """
+    Web Search Agent:
+      - Queries SerpAPI for industry best practices
+    """
     try:
         industry = state["intake"].ClientProfile.get("industry", "")
         query = f"Top AI automation best practices in {industry}"
@@ -180,6 +202,11 @@ def websearch_node(state: GraphState) -> dict:
 # Node 3: Solution Summarizer Agent
 ##############################################
 def summarizer_node(state: GraphState) -> dict:
+    """
+    Summarizer Agent:
+      - Merges intake + web summary
+      - Produces Good/Bad/Ugly, tech stack, workflows
+    """
     try:
         raw_json   = json.dumps(state["intake"].model_dump(), indent=2)
         websum     = state.get("websummary", "")
@@ -191,17 +218,25 @@ def summarizer_node(state: GraphState) -> dict:
             HumanMessage(content=user_ctx)
         ])
         content = strip_fences(resp.content)
-        summary = IntakeSummary.parse_raw(content)
+        # ← change here: parse_raw → model_validate_json
+        summary = IntakeSummary.model_validate_json(content)
         logger.info("[SUMMARIZER] Summary parsed")
         return {"summary": summary}
+    except ValidationError as ve:
+        logger.error(f"[SUMMARIZER] Validation error: {ve}", exc_info=True)
+        return {"error": {"node": "summarizer", "message": str(ve)}}
     except Exception as e:
-        logger.error(f"[SUMMARIZER] {e}", exc_info=True)
+        logger.error(f"[SUMMARIZER] Unexpected error: {e}", exc_info=True)
         return {"error": {"node": "summarizer", "message": str(e)}}
 
 ##############################################
 # Node 4: Report Generation Agent
 ##############################################
 def report_node(state: GraphState) -> dict:
+    """
+    Report Generation Agent:
+      - Builds client-facing report and developer blueprint
+    """
     try:
         summary_json = json.dumps(state["summary"].model_dump(), indent=2)
         sys_ctx      = f"{agent2_prompt['system']}\n\n{core_kb}\n{tools_kb}"
@@ -213,6 +248,7 @@ def report_node(state: GraphState) -> dict:
         ])
         content = strip_fences(resp.content)
         data = json.loads(content)
+
         logger.info("[REPORT] Reports parsed")
         return {
             "client_report": ClientFacingReport(report_markdown=data["client_report"]),
@@ -240,7 +276,7 @@ builder.add_edge("report",     END)
 graph = builder.compile()
 
 ##############################################
-# Public API
+# Public API for batch runs
 ##############################################
 def run_pipeline(raw_intake: dict) -> Dict[str, Any]:
     intake_model = ClientIntake(**raw_intake)
@@ -253,7 +289,25 @@ def run_pipeline(raw_intake: dict) -> Dict[str, Any]:
     }
 
 ##############################################
-# CLI Test Hook
+# Supervisor Chat Chain for UI
+##############################################
+def create_supervisor_chain():
+    """
+    Builds a LangChain LLM chain for the Supervisor Agent chat interface,
+    using the loaded supervisor_prompt.
+    """
+    llm_chat = ChatOpenAI(model_name="gpt-4o-mini", temperature=0.2, openai_api_key=OPENAI_API_KEY)
+    prompt = ChatPromptTemplate.from_messages([
+        SystemMessagePromptTemplate.from_template(supervisor_prompt["system"]),
+        MessagesPlaceholder(variable_name="history"),
+        HumanMessagePromptTemplate.from_template(supervisor_prompt["user"])
+    ])
+    return prompt | llm_chat
+
+supervisor_chain = create_supervisor_chain()
+
+##############################################
+# CLI/Test Hook
 ##############################################
 if __name__ == "__main__":
     sample = json.load(open(os.path.join(BASE_DIR, "sample_intake.json"), encoding="utf-8"))

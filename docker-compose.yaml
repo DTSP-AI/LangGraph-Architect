@@ -1,8 +1,27 @@
 version: "3.8"
+
 services:
   web:
     build: .
+    command: ["streamlit", "run", "streamlit_ui.py"]
     ports:
       - "8501:8501"
     environment:
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      PGVECTOR_CONNECTION_STRING: "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}"
+    depends_on:
+      - postgres
+
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-your_user}
+      POSTGRES_PASSWORD: RickSanchez2025
+      POSTGRES_DB: ${POSTGRES_DB:-your_db}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+volumes:
+  pgdata:
