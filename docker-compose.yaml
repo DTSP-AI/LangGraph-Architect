@@ -1,32 +1,31 @@
 version: "3.8"
 
 services:
+
   postgres:
-    image: ankane/pgvector:15
+    image: postgres:15
     environment:
-      POSTGRES_USER: pguser
+      POSTGRES_USER:  langgraph
       POSTGRES_PASSWORD: RickSanchez2025
-      POSTGRES_DB: langgraph
+      POSTGRES_DB:    langgraph
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - ./docker-entrypoint-initdb.d:/docker-entrypoint-initdb.d
+      - ./docker-entrypoint-initdb.d/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     ports:
       - "5432:5432"
 
   web:
     build: .
-    command: >
-      sh -c "alembic upgrade head &&
-             streamlit run streamlit_ui.py --server.port=8501 --server.address=0.0.0.0"
-    depends_on:
-      - postgres
-    environment:
-      OPENAI_API_KEY: ${OPENAI_API_KEY}
-      PGVECTOR_CONNECTION_STRING: "postgresql://pguser:RickSanchez2025@postgres:5432/langgraph"
-      PGVECTOR_COLLECTION_NAME: "ai_pipeline_memory"
-      ALEMBIC_CONFIG: alembic.ini
     ports:
       - "8501:8501"
+    environment:
+      OPENAI_API_KEY:              ${OPENAI_API_KEY}
+      PGVECTOR_CONNECTION_STRING:  "postgresql://langgraph:RickSanchez2025@postgres:5432/langgraph"
+      PGVECTOR_COLLECTION_NAME:    "ai_pipeline_memory"
+      VECTOR_DECAY_RATE:           "0.01"
+      VECTOR_RETRIEVAL_K:          "6"
+    depends_on:
+      - postgres
 
 volumes:
   pgdata:
