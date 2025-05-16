@@ -1,235 +1,240 @@
-# streamlit_ui.py
-
 import os
-import streamlit as st
+import json
+import logging
+import re
+import time
+from typing import TypedDict, Any, List, Dict
+
+from pydantic import BaseModel, ValidationError
 from dotenv import load_dotenv
-from graph import run_pipeline, supervisor_chain
 
-# ─── Load environment variables ─────────────────────────────────────────────────
+from langchain_openai import ChatOpenAI
+from langchain.schema import SystemMessage, HumanMessage
+from langchain.utilities import SerpAPIWrapper
+from langchain.prompts import (
+    ChatPromptTemplate,
+    SystemMessagePromptTemplate,
+    HumanMessagePromptTemplate,
+    MessagesPlaceholder,
+)
+from langchain.chains import LLMChain
+
+from langgraph.graph import StateGraph, START, END
+
+# ─── Memory Manager ─────────────────────────────────────────────────────────────
+from memory_manager import (
+    get_chat_history,
+    clear_chat_history,         # re-introduced usage
+    add_to_vector_memory,
+    query_vector_memory
+)
+
+# ─── Logging & Env Setup ────────────────────────────────────────────────────────
 load_dotenv()
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
+
+OPENAI_API_KEY  = os.getenv("OPENAI_API_KEY")
+SERPAPI_API_KEY = os.getenv("SERPAPI_API_KEY")
 if not OPENAI_API_KEY:
-    st.error("🔑 OPENAI_API_KEY not set in environment!")
-    st.stop()
+    raise EnvironmentError("OPENAI_API_KEY not set")
+if not SERPAPI_API_KEY:
+    raise EnvironmentError("SERPAPI_API_KEY not set")
 
-# ─── Streamlit page configuration ────────────────────────────────────────────────
-st.set_page_config(page_title="AI Business Optimization Intake", layout="wide")
-st.title("🧠 AI Solutions Discovery & Optimization Intake")
+BASE_DIR = os.path.dirname(__file__)
 
-# ─── Initialize namespaced intake data in session_state ──────────────────────────
-if "intake_data" not in st.session_state:
-    st.session_state.intake_data = {
-        "ClientProfile": {
-            "name": "",
-            "business": "",
-            "website": "",
-            "industry": "",
-            "location": "",
-            "revenue": 0,
-            "employees": 0
-        },
-        "SalesOps": {
-            "sales_process": "",
-            "lead_tools": "",
-            "crm": "",
-            "booking": "",
-            "followups": ""
-        },
-        "Marketing": {
-            "channels": [],
-            "routing": "",
-            "post_lead": "",
-            "automations": ""
-        },
-        "Retention": {
-            "sales_cycle": 30,
-            "follow_up_tactics": "",
-            "programs": ""
-        },
-        "AIReadiness": {
-            "uses_ai": "",
-            "tools": "",
-            "manual_areas": [],
-            "dream": ""
-        },
-        "TechStack": {
-            "tools": [],
-            "api_access": "",
-            "comms": ""
-        },
-        "GoalsTimeline": {
-            "goals": "",
-            "problem": "",
-            "comfort": "",
-            "engagement": "",
-            "timeline": ""
-        },
-        "HAF": {
-            "CriticalRoles": "",
-            "KeyWorkflows": "",
-            "AIEligibleTasks": ""
-        },
-        "CII": {
-            "MemoryRequirements": "",
-            "ToolsRequired": "",
-            "SecurityNotes": "",
-            "Latency": {
-                "Realtime": "",
-                "Async": ""
-            }
-        },
-        "ReferenceDocs": ""
+# ─── Prompt & KB Loading ─────────────────────────────────────────────────────────
+def load_prompt(path: str) -> Dict[str, str]:
+    raw = json.load(open(path, encoding="utf-8"))
+    system = "\n".join(raw["system"]) if isinstance(raw["system"], list) else raw["system"]
+    user   = "\n".join(raw.get("user_template", [])) if isinstance(raw.get("user_template"), list) else raw.get("user_template", "")
+    return {"system": system, "user": user}
+
+supervisor_prompt = load_prompt(os.path.join(BASE_DIR, "prompts/supervisor.json"))
+agent1_prompt     = load_prompt(os.path.join(BASE_DIR, "prompts/agent_1.json"))
+agent2_prompt     = load_prompt(os.path.join(BASE_DIR, "prompts/agent_2.json"))
+
+tools_kb = open(os.path.join(BASE_DIR, "knowledge_base/LGarchitect_tools_slim.txt"), encoding="utf-8").read()
+multi_kb = open(os.path.join(BASE_DIR, "knowledge_base/LGarchitect_multi_agent_slim.txt"), encoding="utf-8").read()
+core_kb  = open(os.path.join(BASE_DIR, "knowledge_base/LGarchitect_LangGraph_core_slim.txt"), encoding="utf-8").read()
+
+# ─── Data Models ────────────────────────────────────────────────────────────────
+class ClientIntake(BaseModel):
+    ClientProfile:   dict
+    SalesOps:        dict
+    Marketing:       dict
+    Retention:       dict
+    AIReadiness:     dict
+    TechStack:       dict
+    GoalsTimeline:   dict
+    HAF:             dict
+    CII:             dict
+    ReferenceDocs:   str
+
+class IntakeSummary(BaseModel):
+    ClientProfile:   dict
+    Good:            List[str]
+    Bad:             List[str]
+    Ugly:            List[str]
+    SolutionSummary: str
+    WorkflowOutline: List[str]
+    HAF:             dict
+    CII:             dict
+
+class ClientFacingReport(BaseModel):
+    report_markdown: str
+
+class DevFacingReport(BaseModel):
+    blueprint_graph: str
+
+class GraphState(TypedDict):
+    intake:        ClientIntake
+    websummary:    str
+    summary:       IntakeSummary
+    client_report: ClientFacingReport
+    dev_report:    DevFacingReport
+    error:         Dict[str, Any]
+
+# ─── LLM & Tools Initialization ────────────────────────────────────────────────
+llm = ChatOpenAI(model_name="gpt-4o-mini", temperature=0.2, openai_api_key=OPENAI_API_KEY)
+search_tool = SerpAPIWrapper(serpapi_api_key=SERPAPI_API_KEY)
+
+def strip_fences(text: str) -> str:
+    text = re.sub(r"^```[\w]*\n", "", text, flags=re.MULTILINE)
+    text = re.sub(r"\n```$", "", text, flags=re.MULTILINE)
+    return text.strip()
+
+def robust_invoke(messages: List[Any]) -> Any:
+    for attempt in range(3):
+        try:
+            return llm.invoke(messages)
+        except Exception as e:
+            logger.warning(f"LLM invoke failed (attempt {attempt+1}/3): {e}")
+            time.sleep(2 ** attempt)
+    logger.error("LLM invoke permanently failed after 3 attempts", exc_info=True)
+    raise
+
+# ─── Node 1: Supervisor Agent ───────────────────────────────────────────────────
+def supervisor_node(state: GraphState) -> dict:
+    try:
+        intake_model = state["intake"]
+        session_id   = intake_model.ClientProfile.get("name", "default")
+
+        # **New**: if the client JSON asks to reset, wipe history
+        if intake_model.ClientProfile.get("reset_history", False):
+            clear_chat_history(session_id)
+
+        history = get_chat_history(session_id)
+        msgs: List[Any] = [ SystemMessage(content=supervisor_prompt["system"]) ]
+        msgs.extend(history.messages)
+
+        raw_json = json.dumps(intake_model.model_dump(), indent=2)
+        msgs.append(HumanMessage(content=supervisor_prompt["user"].replace("{RAW_INTAKE_JSON}", raw_json)))
+        for doc in query_vector_memory(raw_json, k=3):
+            msgs.append(SystemMessage(content=f"MemoryContext: {doc.page_content}"))
+
+        resp = robust_invoke(msgs)
+        content = strip_fences(resp.content)
+
+        history.add_user_message(raw_json)
+        history.add_ai_message(content)
+        add_to_vector_memory(content, metadata={"session_id": session_id})
+
+        parsed   = json.loads(content)
+        validated = parsed.get("validated_intake", parsed)
+        intake_model = ClientIntake(**validated)
+        return {"intake": intake_model}
+
+    except Exception as e:
+        logger.error(f"[SUPERVISOR] {e}", exc_info=True)
+        return {"error": {"node": "supervisor", "message": str(e)}}
+
+# ─── Node 2: Web Search Agent ────────────────────────────────────────────────────
+def websearch_node(state: GraphState) -> dict:
+    try:
+        industry = state["intake"].ClientProfile.get("industry", "")
+        summary  = search_tool.run(f"Top AI automation best practices in {industry}")
+        return {"websummary": summary}
+    except Exception as e:
+        logger.error(f"[WEBSEARCH] {e}", exc_info=True)
+        return {"error": {"node": "websearch", "message": str(e)}}
+
+# ─── Node 3: Solution Summarizer Agent ───────────────────────────────────────────
+def summarizer_node(state: GraphState) -> dict:
+    try:
+        raw_json   = json.dumps(state["intake"].model_dump(), indent=2)
+        system_ctx = f"{agent1_prompt['system']}\n\nWebSummary:\n{state.get('websummary','')}\n\n{multi_kb}"
+        user_ctx   = agent1_prompt["user"].replace("{RAW_INTAKE_JSON}", raw_json)
+
+        resp    = robust_invoke([
+            SystemMessage(content=system_ctx),
+            HumanMessage(content=user_ctx)
+        ])
+        content = strip_fences(resp.content)
+        summary = IntakeSummary.model_validate_json(json.dumps(json.loads(content)))
+        return {"summary": summary}
+    except Exception as e:
+        logger.error(f"[SUMMARIZER] {e}", exc_info=True)
+        return {"error": {"node": "summarizer", "message": str(e)}}
+
+# ─── Node 4: Report Generation Agent ─────────────────────────────────────────────
+def report_node(state: GraphState) -> dict:
+    try:
+        summary_json = json.dumps(state["summary"].model_dump(), indent=2)
+        system_ctx   = f"{agent2_prompt['system']}\n\n{core_kb}\n{tools_kb}"
+        user_ctx     = agent2_prompt["user"].replace("{SUMMARY_JSON}", summary_json)
+
+        resp    = robust_invoke([
+            SystemMessage(content=system_ctx),
+            HumanMessage(content=user_ctx)
+        ])
+        content = strip_fences(resp.content)
+        data    = json.loads(content)
+        return {
+            "client_report": ClientFacingReport(report_markdown=data["client_report"]),
+            "dev_report":    DevFacingReport(blueprint_graph=data["developer_report"])
+        }
+    except Exception as e:
+        logger.error(f"[REPORT] {e}", exc_info=True)
+        return {"error": {"node": "report", "message": str(e)}}
+
+# ─── Build LangGraph Pipeline ────────────────────────────────────────────────────
+builder = StateGraph(GraphState)
+builder.add_node("supervisor", supervisor_node)
+builder.add_node("websearch",  websearch_node)
+builder.add_node("summarize",  summarizer_node)
+builder.add_node("report",     report_node)
+builder.add_edge(START,        "supervisor")
+builder.add_edge("supervisor", "websearch")
+builder.add_edge("websearch",  "summarize")
+builder.add_edge("summarize",  "report")
+builder.add_edge("report",     END)
+graph = builder.compile()
+
+# ─── Public API ─────────────────────────────────────────────────────────────────
+def run_pipeline(raw_intake: dict) -> Any:
+    intake_model = ClientIntake(**raw_intake)
+    result       = graph.invoke({"intake": intake_model})
+    return {
+        "client_report": result.get("client_report", {}).report_markdown,
+        "dev_report":    result.get("dev_report", {}).blueprint_graph,
+        "error":         result.get("error", None)
     }
 
-if "intake_complete" not in st.session_state:
-    st.session_state.intake_complete = False
+# ─── Supervisor Chain for UI Q&A ─────────────────────────────────────────────────
+def create_supervisor_chain() -> LLMChain:
+    prompt = ChatPromptTemplate.from_messages([
+        SystemMessagePromptTemplate.from_template(supervisor_prompt["system"]),
+        MessagesPlaceholder(variable_name="history"),
+        HumanMessagePromptTemplate.from_template(supervisor_prompt["user"]),
+    ])
+    return LLMChain(llm=llm, prompt=prompt)
 
-if "reports" not in st.session_state:
-    st.session_state.reports = {}
+supervisor_chain = create_supervisor_chain()
 
-if "supervisor_history" not in st.session_state:
-    st.session_state.supervisor_history = []
-
-# ─── Sidebar: Mirrored Intake Form ────────────────────────────────────────────────
-if not st.session_state.intake_complete:
-    with st.sidebar:
-        st.header("📋 Business Intake Form")
-
-        cp = st.session_state.intake_data["ClientProfile"]
-        cp["name"] = st.text_input("Your Name", value=cp["name"])
-        cp["business"] = st.text_input("Business Name", value=cp["business"])
-        cp["website"] = st.text_input("Business Website", value=cp["website"])
-        industries = ["Jewelry","Med Spa","Real Estate","Fitness","Other"]
-        cp["industry"] = st.selectbox(
-            "Industry", industries,
-            index=industries.index(cp["industry"]) if cp["industry"] in industries else 0
-        )
-        cp["location"] = st.text_input("Location", value=cp["location"])
-        cp["revenue"] = st.number_input(
-            "Annual Revenue (USD)", min_value=0, step=1000, format="%d", value=cp["revenue"]
-        )
-        cp["employees"] = st.number_input(
-            "Number of Employees", min_value=0, step=1, format="%d", value=cp["employees"]
-        )
-
-        so = st.session_state.intake_data["SalesOps"]
-        so["sales_process"] = st.text_area("Describe your current sales process:", value=so["sales_process"])
-        so["lead_tools"] = st.text_area("Tools for leads & appointments:", value=so["lead_tools"])
-        so["crm"] = st.text_input("Which CRM do you use?", value=so["crm"])
-        so["booking"] = st.text_area("How are appointments booked?", value=so["booking"])
-        so["followups"] = st.text_area("How do you track follow-ups/missed leads?", value=so["followups"])
-
-        mk = st.session_state.intake_data["Marketing"]
-        channels = ["Google Ads","Meta Ads","TikTok","SEO","Influencer","Referral","Events"]
-        mk["channels"] = st.multiselect("Active Marketing Channels", channels, default=mk["channels"])
-        mk["routing"] = st.text_area("How are leads captured/routed?", value=mk["routing"])
-        mk["post_lead"] = st.text_area("What happens after a lead comes in?", value=mk["post_lead"])
-        mk["automations"] = st.text_area("Any automations currently in place?", value=mk["automations"])
-
-        rt = st.session_state.intake_data["Retention"]
-        rt["sales_cycle"] = st.slider("Average Sales Cycle (days)", 1, 180, value=rt["sales_cycle"])
-        rt["follow_up_tactics"] = st.text_area("Follow-up tactics:", value=rt["follow_up_tactics"])
-        rt["programs"] = st.text_area("Loyalty/membership programs:", value=rt["programs"])
-
-        ar = st.session_state.intake_data["AIReadiness"]
-        uses_ai_opts = ["Yes","No"]
-        ar["uses_ai"] = st.selectbox("Are you using AI?", uses_ai_opts,
-                                     index=uses_ai_opts.index(ar["uses_ai"]) if ar["uses_ai"] in uses_ai_opts else 1)
-        ar["tools"] = st.text_area("If yes, describe your AI tools:", value=ar["tools"])
-        manual_opts = ["Lead follow-up","Appointment setting","Content creation","Customer questions"]
-        ar["manual_areas"] = st.multiselect("Where most manual time spent?", manual_opts, default=ar["manual_areas"])
-        ar["dream"] = st.text_area("Dream automation (perfect world):", value=ar["dream"])
-
-        ts = st.session_state.intake_data["TechStack"]
-        tool_opts = ["Calendly","Shopify","Squarespace","Twilio","Stripe","Zapier","Klaviyo","Mailchimp","GoHighLevel"]
-        ts["tools"] = st.multiselect("Current Tools in Use", tool_opts, default=ts["tools"])
-        api_opts = ["Yes","No","Not sure"]
-        ts["api_access"] = st.selectbox("Admin/API access to these tools?", api_opts,
-                                        index=api_opts.index(ts["api_access"]) if ts["api_access"] in api_opts else 2)
-        comms_opts = ["Text","Email","Phone","DMs","Website Chat"]
-        ts["comms"] = st.selectbox("Preferred communication:", comms_opts,
-                                   index=comms_opts.index(ts["comms"]) if ts["comms"] in comms_opts else 0)
-
-        gt = st.session_state.intake_data["GoalsTimeline"]
-        gt["goals"] = st.text_area("Top 3 revenue goals (6 mo):", value=gt["goals"])
-        gt["problem"] = st.text_area("#1 problem to solve:", value=gt["problem"])
-        comfort_opts = ["Bring on the robots","Need guidance","Start simple"]
-        gt["comfort"] = st.selectbox("Comfort with automation/AI:", comfort_opts,
-                                     index=comfort_opts.index(gt["comfort"]) if gt["comfort"] in comfort_opts else 2)
-        engagement_opts = ["Done-For-You","Hybrid","DIY with Support"]
-        gt["engagement"] = st.selectbox("Preferred engagement model:", engagement_opts,
-                                        index=engagement_opts.index(gt["engagement"]) if gt["engagement"] in engagement_opts else 0)
-        timeline_opts = ["<30 days","30-60 days","60-90 days","Flexible"]
-        gt["timeline"] = st.selectbox("Implementation timeline:", timeline_opts,
-                                      index=timeline_opts.index(gt["timeline"]) if gt["timeline"] in timeline_opts else 0)
-
-        haf = st.session_state.intake_data["HAF"]
-        with st.expander("🔰 HAF (Hierarchical Agent Framework)"):
-            haf["CriticalRoles"] = st.text_area("Critical roles & responsibilities:", value=haf["CriticalRoles"])
-            haf["KeyWorkflows"]    = st.text_area("Key workflows map:", value=haf["KeyWorkflows"])
-            haf["AIEligibleTasks"] = st.text_area("Tasks for AI agents:", value=haf["AIEligibleTasks"])
-
-        cii = st.session_state.intake_data["CII"]
-        with st.expander("🧩 CII (Cognitive Infrastructure Intake)"):
-            cii["MemoryRequirements"] = st.text_area("Memory/data needs:", value=cii["MemoryRequirements"])
-            cii["ToolsRequired"]      = st.text_area("APIs/tools needed:", value=cii["ToolsRequired"])
-            cii["SecurityNotes"]      = st.text_area("Compliance constraints:", value=cii["SecurityNotes"])
-            lat = cii["Latency"]
-            lat["Realtime"] = st.text_area("Real-time workflows:", value=lat["Realtime"])
-            lat["Async"]    = st.text_area("Background/async workflows:", value=lat["Async"])
-
-        # ── Enable Generate only when required fields are populated ──────────────────
-        required_keys = [
-            ("ClientProfile","name"), ("ClientProfile","business"), ("ClientProfile","website"),
-            ("ClientProfile","industry"), ("ClientProfile","location"),
-            ("SalesOps","sales_process"), ("SalesOps","lead_tools"), ("SalesOps","crm"),
-            ("GoalsTimeline","goals"), ("GoalsTimeline","problem")
-        ]
-        ready = True
-        for section, key in required_keys:
-            val = st.session_state.intake_data[section][key]
-            if val in [None, "", [], 0]:
-                ready = False
-                break
-
-        if st.sidebar.button("🧠 Generate Full Report & Scope", disabled=not ready):
-            raw_data = st.session_state.intake_data.copy()
-            result   = run_pipeline(raw_data)
-            if isinstance(result, dict) and "error" in result:
-                err = result["error"]
-                if isinstance(err, list):
-                    for e in err:
-                        st.error(f"❌ Pipeline error in node '{e.get('node')}': {e.get('message')}")
-                else:
-                    st.error(f"❌ Pipeline error in node '{err.get('node')}': {err.get('message')}")
-            else:
-                st.session_state.intake_complete = True
-                st.session_state.reports = result
-
-# ─── Main area: separator + Supervisor Chat + Reports ───────────────────────────
-st.markdown("---")
-st.header("💬 Supervisor Agent Chat")
-
-# render chat history
-for msg in st.session_state.supervisor_history:
-    st.chat_message(msg["role"]).write(msg["content"])
-
-# handle new chat input
-user_input = st.chat_input("Ask the Supervisor Agent…")
-if user_input:
-    st.session_state.supervisor_history.append({"role": "user", "content": user_input})
-    resp = supervisor_chain.invoke({
-        "history":    st.session_state.supervisor_history,
-        "user_input": user_input
-    })
-    assistant_content = resp.content.strip()
-    st.session_state.supervisor_history.append({"role": "assistant", "content": assistant_content})
-    st.experimental_rerun()
-
-# once intake is complete, show reports
-if st.session_state.intake_complete:
-    out = st.session_state.reports
-    st.subheader("📄 Client-Facing Report")
-    st.markdown(out["client_report"], unsafe_allow_html=True)
-    st.subheader("📋 Dev-Facing Blueprint")
-    st.markdown(out["dev_report"], unsafe_allow_html=True)
+# ─── CLI Test Hook ──────────────────────────────────────────────────────────────
+if __name__ == "__main__":
+    sample  = json.load(open(os.path.join(BASE_DIR, "sample_intake.json"), encoding="utf-8"))
+    reports = run_pipeline(sample)
+    print("\n==== CLIENT REPORT ====\n", reports.get("client_report"))
+    print("==== DEV REPORT ====\n",     reports.get("dev_report"))
