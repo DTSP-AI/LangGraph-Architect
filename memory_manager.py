@@ -106,6 +106,11 @@ def _persist_chat_history(session_id: str) -> None:
         except Exception as e:
             logger.error(f"Failed to persist chat history for '{session_id}': {e}")
 
+def add_message_to_history(session_id: str, message: str) -> None:
+    history = get_chat_history(session_id)
+    history.add_message(message)
+    _persist_chat_history(session_id)  # Persist changes
+
 # ─── Persistent Vector Memory (PGVector) + TTL ─────────────────────────────────
 _vector_retriever: Optional[TimeWeightedVectorStoreRetriever] = None
 _embedding_model = OpenAIEmbeddings()

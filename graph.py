@@ -245,6 +245,9 @@ def run_pipeline(raw_intake: Dict[str, Any]) -> Dict[str, Any]:
 
 # ─── Supervisor Chat Chain for UI ────────────────────────────────────────────────
 def create_supervisor_chain():
+    """
+    Create a chat chain for the supervisor agent using the supervisor prompt.
+    """
     llm_chat = ChatOpenAI(model_name="gpt-4o-mini", temperature=0.2, openai_api_key=OPENAI_API_KEY)
     prompt = (
         SystemMessagePromptTemplate.from_template(supervisor_prompt["system"]) |
@@ -253,6 +256,7 @@ def create_supervisor_chain():
     )
     return ChatPromptTemplate.from_messages(prompt) | llm_chat
 
+# Export the supervisor chain
 supervisor_chain = create_supervisor_chain()
 
 # ─── CLI/Test Hook ───────────────────────────────────────────────────────────────

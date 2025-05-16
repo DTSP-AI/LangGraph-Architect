@@ -1,31 +1,39 @@
-version: "3.8"
+version: "3.9"
 
 services:
-
   postgres:
     image: postgres:15
+    container_name: langgraph_postgres
     environment:
-      POSTGRES_USER:      langgraph
-      POSTGRES_PASSWORD:  RickSanchez2025
-      POSTGRES_DB:        langgraph
+      POSTGRES_USER: langgraph
+      POSTGRES_DB: langgraph
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
     volumes:
-      - pgdata:/var/lib/postgresql/data
-      - ./docker-entrypoint-initdb.d/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker-entrypoint-initdb.d:/docker-entrypoint-initdb.d
+    secrets:
+      - db_password
     ports:
-      - "5433:5432"
+      - "5432:5432"
 
   web:
-    build: .
-    ports:
-      - "8502:8501"    # host 8502 → container 8501
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: langgraph_web
     environment:
-      OPENAI_API_KEY:             ${OPENAI_API_KEY}
-      PGVECTOR_CONNECTION_STRING: "postgresql://langgraph:RickSanchez2025@postgres:5432/langgraph"
-      PGVECTOR_COLLECTION_NAME:   "ai_pipeline_memory"
-      VECTOR_DECAY_RATE:          "0.01"
-      VECTOR_RETRIEVAL_K:         "6"
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - PGVECTOR_CONNECTION_STRING=postgresql://langgraph:${DB_PASSWORD}@postgres:5432/langgraph
+    ports:
+      - "8502:8501"
     depends_on:
       - postgres
+    secrets:
+      - db_password
 
 volumes:
-  pgdata:
+  postgres_data:
+
+secrets:
+  db_password:
+    file: ./secrets/db_password
