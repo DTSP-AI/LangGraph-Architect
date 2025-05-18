@@ -6,7 +6,7 @@ import time
 import logging
 import pickle
 from datetime import datetime, timezone, timedelta
-from typing import List, Optional, Dict, Union # Added Union
+from typing import List, Optional, Dict
 
 from dotenv import load_dotenv
 

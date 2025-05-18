@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 # Use BaseMessage for type hinting, SystemMessage, HumanMessage for constructing
 from langchain_core.messages import SystemMessage, HumanMessage, BaseMessage
-from langchain.utilities import SerpAPIWrapper # Check if this is still used or if Tavily is preferred
+from langchain_community.utilities import SerpAPIWrapper
 from langgraph.graph import StateGraph, START, END
 
 # Ensure memory_manager functions are correctly imported
@@ -157,77 +157,61 @@ def robust_invoke(messages: List[BaseMessage], max_retries: int = 2, initial_del
 def supervisor_node(state: GraphState) -> Dict[str, Any]:
     try:
         intake_model = state["intake"]
-        session_id = state["session_id"] # Use session_id from state
+        session_id = state["session_id"]
         logger.info(f"[SUPERVISOR_NODE] Processing for session_id: {session_id}")
 
-        # The primary intake interview is done by supervisor_chain in the UI.
-        # This node now focuses on the intake received from the UI.
-        # It can validate, enrich using vector memory, but shouldn't restart a full chat.
-
-        # Option 1: Use vector memory for context/enrichment
         current_intake_snapshot = json.dumps(intake_model.model_dump(), indent=2)
         memory_context_docs = query_vector_memory(
             current_intake_snapshot,
             k=3,
-            filter_metadata={"session_id": session_id} # Query session-specific vector memory if available
+            filter_metadata={"session_id": session_id}
         )
         memory_context_str = "\n".join([doc.page_content for doc in memory_context_docs])
 
-        # Prepare messages for the LLM.
-        # This supervisor node might have a slightly different system prompt than the UI chat supervisor,
-        # focusing on final validation and structuring based on the already gathered intake.
-        # For simplicity, we can reuse the main supervisor_prompt but the LLM will behave differently
-        # given that RAW_INTAKE_JSON is already mostly filled.
-
-        # Get chat history if this node needs to understand the conversation that led to the intake
-        # This history should be the one from the UI, persisted via memory_manager by streamlit_ui.py
         chat_history_obj = get_chat_history(session_id)
-        processed_history = chat_history_obj.messages # These are already BaseMessage objects
+        processed_history = chat_history_obj.messages
 
         msgs: List[BaseMessage] = [SystemMessage(content=supervisor_prompt["system"])]
         if memory_context_str:
             msgs.append(SystemMessage(content=f"Relevant Context from Memory:\n{memory_context_str}"))
-        
-        msgs.extend(processed_history) # Add the conversation history from UI
-
-        # The 'user' part of the prompt for this node might just be the task instruction
-        # given the history and current intake.
+        msgs.extend(processed_history)
         task_instruction = supervisor_prompt["user"].replace("{RAW_INTAKE_JSON}", current_intake_snapshot)
         msgs.append(HumanMessage(content=task_instruction))
 
         resp = robust_invoke(msgs)
         content = strip_fences(resp.content)
 
-        # Attempt to parse the response, expecting "validated_intake" or "updated_fields"
         try:
             parsed_response = json.loads(content)
             validated_intake_data = parsed_response.get("validated_intake", parsed_response.get("updated_fields", intake_model.model_dump()))
-            # Ensure validated_intake_data is a dict before pydantic validation
             if not isinstance(validated_intake_data, dict):
-                 logger.warning("[SUPERVISOR_NODE] LLM response for intake was not a dictionary. Using original intake.")
-                 final_intake_model = intake_model # Fallback to original if parsing fails badly
+                logger.warning("[SUPERVISOR_NODE] LLM response for intake was not a dictionary. Using original intake.")
+                final_intake_model = intake_model
             else:
                 final_intake_model = ClientIntake(**validated_intake_data)
             logger.info(f"[SUPERVISOR_NODE] Intake processed for session {session_id}.")
 
-            # Optionally, add this interaction or summary to vector memory
-            # add_to_vector_memory(f"Supervisor node validated intake: {json.dumps(final_intake_model.model_dump())}",
-            #                      metadata={"session_id": session_id, "type": "supervisor_node_summary"})
+            # Log this validation to vector memory
+            add_to_vector_memory(
+                f"Supervisor node validated intake: {json.dumps(final_intake_model.model_dump())}",
+                metadata={"session_id": session_id, "type": "supervisor_node_summary"}
+            )
+
+            # Optionally, add this message to chat history
+            add_lc_message_to_history(session_id, HumanMessage(content="Supervisor node validation complete."))
 
             return {"intake": final_intake_model}
 
         except json.JSONDecodeError:
             logger.error(f"[SUPERVISOR_NODE] Failed to parse LLM response as JSON: {content}")
-            # If parsing fails, return the original intake to allow pipeline to continue if possible
             return {"intake": intake_model, "error": {"node": "supervisor", "message": "Failed to parse LLM JSON output."}}
         except ValidationError as ve:
             logger.error(f"[SUPERVISOR_NODE] Pydantic validation error: {ve}")
             return {"intake": intake_model, "error": {"node": "supervisor", "message": f"Pydantic validation error: {ve}"}}
 
-
     except Exception as e:
         logger.error(f"[SUPERVISOR_NODE] Error: {e}", exc_info=True)
-        return {"error": {"node": "supervisor", "message": str(e)}, "intake": state.get("intake")} # Return original intake on error
+        return {"error": {"node": "supervisor", "message": str(e)}, "intake": state.get("intake")}
 
 # ─── Node 2: Web Search Agent ─────────────────────────────────────────────────────
 def websearch_node(state: GraphState) -> Dict[str, Any]:
@@ -365,7 +349,7 @@ graph = builder.compile()
 logger.info("LangGraph pipeline compiled.")
 
 # ─── Public API for batch runs ───────────────────────────────────────────────────
-def run_pipeline(raw_intake: Dict[str, Any], session_id: str) -> Dict[str, Any]: # Added session_id
+def run_pipeline(raw_intake: Dict[str, Any], session_id: str) -> Dict[str, Any]:
     try:
         intake_model = ClientIntake(**raw_intake)
         logger.info(f"Running pipeline for session_id: {session_id} with intake: {intake_model.ClientProfile.get('name')}")
@@ -381,14 +365,15 @@ def run_pipeline(raw_intake: Dict[str, Any], session_id: str) -> Dict[str, Any]:
         }
         final_state = graph.invoke(initial_graph_state)
 
-        # Check for errors accumulated in the state
         if final_state.get("error"):
             logger.error(f"Pipeline error for session {session_id}: {final_state['error']}")
             return {"error": final_state["error"]}
 
-        # Ensure reports are ClientFacingReport and DevFacingReport instances or provide defaults
         client_report_obj = final_state.get("client_report")
         dev_report_obj = final_state.get("dev_report")
+
+        # Example: Optionally clear chat history after pipeline run (for demonstration)
+        clear_chat_history(session_id)
 
         return {
             "client_report": client_report_obj.report_markdown if client_report_obj else "Client report generation failed or was not run.",
