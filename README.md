@@ -1,4 +1,4 @@
-# AI Solutions Business Analysis
+# LangGraph Architect
 
 This project provides an AI-powered intake form to analyze and optimize business operations using LangChain and OpenAI tools.
 
