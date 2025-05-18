@@ -1,6 +1,3 @@
-############################
-# 1. Imports & Config
-############################
 import os
 import json
 import streamlit as st
