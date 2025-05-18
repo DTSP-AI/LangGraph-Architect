@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
 
   postgres:
@@ -25,7 +23,7 @@ services:
     environment:
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       PGVECTOR_CONNECTION_STRING: postgresql://langgraph:RickSanchez2025@postgres:5432/langgraph
-      PGVECTOR_COLLECTION_NAME: ai_pipeline_memory
+      PGVECTOR_COLLECTION_NAME: vector_memory
       VECTOR_DECAY_RATE: "0.01"
       VECTOR_RETRIEVAL_K: "6"
       VECTOR_TTL_DAYS: "30"
