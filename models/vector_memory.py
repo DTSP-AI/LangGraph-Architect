@@ -1,3 +1,5 @@
+# models/vector_memory.py
+
 from sqlalchemy import Column, Integer, JSON, Text, TIMESTAMP
 from pgvector.sqlalchemy import Vector
 from sqlalchemy.ext.declarative import declarative_base
@@ -7,8 +9,12 @@ Base = declarative_base()
 
 class VectorEntry(Base):
     __tablename__ = "vector_memory"
-    id         = Column(Integer, primary_key=True, autoincrement=True)
-    embedding  = Column(Vector(1536), nullable=False)  # adjust dim to your model
-    metadata   = Column(JSON, nullable=False)
-    content    = Column(Text, nullable=False)
-    created_at = Column(TIMESTAMP(timezone=True), server_default=text("NOW()"))
+
+    id          = Column(Integer, primary_key=True, autoincrement=True)
+    embedding   = Column(Vector(1536), nullable=False)           # adjust dim as needed
+    meta        = Column("metadata", JSON, nullable=False)       # ← renamed attribute
+    content     = Column(Text, nullable=False)
+    created_at  = Column(
+                    TIMESTAMP(timezone=True),
+                    server_default=text("NOW()")
+                 )
