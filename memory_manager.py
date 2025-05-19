@@ -1,4 +1,4 @@
-# memory_manager.py
+# memory_manager.py — FIXED FOR VECTOR EXTENSION ERROR
 
 import os
 import json
@@ -13,6 +13,7 @@ from langchain_community.vectorstores.pgvector import PGVector
 from langchain_core.documents import Document
 from langchain.retrievers import TimeWeightedVectorStoreRetriever
 from langchain_core.chat_history import InMemoryChatMessageHistory
+from sqlalchemy import create_engine, text
 
 # ───────────────────────────────────────────────────────────────
 # 📦 ENVIRONMENT SETUP
@@ -33,6 +34,19 @@ os.makedirs(HISTORY_DIR, exist_ok=True)
 os.makedirs(LOG_DIR, exist_ok=True)
 
 logger = logging.getLogger(__name__)
+
+# ───────────────────────────────────────────────────────────────
+# 💥 PRECHECK FOR VECTOR EXTENSION
+# ───────────────────────────────────────────────────────────────
+def ensure_pgvector_extension():
+    try:
+        engine = create_engine(PGVECTOR_CONN_STR)
+        with engine.connect() as conn:
+            conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector;"))
+            logger.info("✅ PGVector extension verified/created successfully.")
+    except Exception as e:
+        logger.error(f"☠️ Failed to create or verify pgvector extension: {e}")
+        raise RuntimeError(f"PostgreSQL vector extension missing or inaccessible: {e}")
 
 # ───────────────────────────────────────────────────────────────
 # 💬 CHAT HISTORY MANAGEMENT
@@ -106,6 +120,9 @@ def init_vector_retriever() -> TimeWeightedVectorStoreRetriever:
     global _vector_retriever
     if not PGVECTOR_CONN_STR:
         raise RuntimeError("Environment variable PGVECTOR_CONNECTION_STRING is not set")
+
+    ensure_pgvector_extension()
+
     if _vector_retriever is None:
         embeddings = _get_embedding_model()
         store = PGVector(
@@ -180,5 +197,4 @@ def get_feedback() -> List[dict]:
 # ───────────────────────────────────────────────────────────────
 # 🚀 INITIALIZE ON IMPORT
 # ───────────────────────────────────────────────────────────────
-# Fail fast on startup if vector DB is not configured correctly
 init_vector_retriever()

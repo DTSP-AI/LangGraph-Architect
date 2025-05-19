@@ -30,6 +30,15 @@ services:
       CHAT_HISTORY_DIR: ./data/history
       FEEDBACK_LOG_DIR: ./data
       MAX_HISTORY_LENGTH: "100"
+    command: >
+      sh -c "
+        until pg_isready -h postgres -p 5432; do
+          echo 'Waiting for Postgres...';
+          sleep 1;
+        done &&
+        alembic upgrade head &&
+        streamlit run streamlit_ui.py --server.port=8501 --server.address=0.0.0.0
+      "
 
 volumes:
   pgdata:
