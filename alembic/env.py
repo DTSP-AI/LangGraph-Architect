@@ -1,26 +1,37 @@
+# alembic/env.py
+
 from logging.config import fileConfig
 import os
+import sys
 from sqlalchemy import engine_from_config, pool
 from alembic import context
 
-# 1. Import your model Base
+# ─── Ensure project root is on PYTHONPATH ───────────────────────────────────────
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+# ─── Import your ORM Base ───────────────────────────────────────────────────────
 from models.vector_memory import Base
 
 # this is the Alembic Config object
 config = context.config
 
-# 2. Use env var or ini
+# ─── Override URL from env var if present ──────────────────────────────────────
 db_url = os.getenv("PGVECTOR_CONNECTION_STRING") or config.get_main_option("sqlalchemy.url")
 config.set_main_option("sqlalchemy.url", db_url)
 
-# Interpret the config file for Python logging.
+# ─── Logging setup from config file ────────────────────────────────────────────
 fileConfig(config.config_file_name)
 
-# 3. Point at your metadata
+# ─── Metadata for 'autogenerate' support ───────────────────────────────────────
 target_metadata = Base.metadata
 
 def run_migrations_offline():
-    context.configure(url=db_url, target_metadata=target_metadata, literal_binds=True)
+    context.configure(
+        url=db_url,
+        target_metadata=target_metadata,
+        literal_binds=True,
+        dialect_opts={"paramstyle": "named"},
+    )
     with context.begin_transaction():
         context.run_migrations()
 
